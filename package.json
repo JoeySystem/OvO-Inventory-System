@@ -4,12 +4,17 @@
   "description": "OvO System - 物料进销存管理系统",
   "main": "server/index.js",
   "scripts": {
+    "check-env": "node server/scripts/check-env.js",
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "init-db": "node server/db/init.js",
     "import:inventory-costs": "node deploy/import-inventory-costs.js",
     "test": "vitest run",
     "test:watch": "vitest"
+  },
+  "engines": {
+    "node": ">=20 <23",
+    "npm": ">=10 <12"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

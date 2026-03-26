@@ -16,4 +16,5 @@ coverage/
 .cache/
 .tmp/
 tmp/
+.codex-tools/
 .DS_Store

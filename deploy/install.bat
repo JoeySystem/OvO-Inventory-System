@@ -104,6 +104,8 @@ if not exist "%PROJECT_DIR%\.env" (
     echo PORT=3000> "%PROJECT_DIR%\.env"
     echo SESSION_SECRET=%RANDOM%%RANDOM%%RANDOM%-maverick-production>> "%PROJECT_DIR%\.env"
     echo NODE_ENV=production>> "%PROJECT_DIR%\.env"
+    echo COOKIE_SECURE=auto>> "%PROJECT_DIR%\.env"
+    echo TRUST_PROXY=0>> "%PROJECT_DIR%\.env"
     echo DB_PATH=%PROJECT_DIR%\data\inventory.db>> "%PROJECT_DIR%\.env"
     echo SESSION_DB_DIR=%PROJECT_DIR%\data>> "%PROJECT_DIR%\.env"
     echo [OK] .env config file created
@@ -114,6 +116,13 @@ if not exist "%PROJECT_DIR%\.env" (
 :: Ensure data directory exists
 if not exist "%PROJECT_DIR%\data" mkdir "%PROJECT_DIR%\data"
 echo.
+
+call npm run check-env -- --strict
+if %errorlevel% neq 0 (
+    echo [X] Environment compatibility check failed!
+    pause
+    exit /b 1
+)
 
 :: ============================================
 :: Step 5: Initialize database

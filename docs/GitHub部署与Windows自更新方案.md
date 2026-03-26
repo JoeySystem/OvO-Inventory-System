@@ -358,6 +358,19 @@ Windows 11 机器建议：
 - Git
 - 稳定网络
 - SSD 硬盘
+
+不建议直接使用 Node 24.x。  
+当前项目依赖 `better-sqlite3`，实机部署已经验证 Node 24 存在兼容风险。
+
+环境变量建议默认采用：
+
+```env
+NODE_ENV=production
+COOKIE_SECURE=auto
+TRUST_PROXY=0
+```
+
+这样在 `http://localhost` 首次部署时，也能正常保持登录态。
 - 至少 16GB 内存
 
 并建议：
@@ -515,4 +528,3 @@ Windows 11 机器建议：
 
 - **GitHub 管代码：现在就可以做**
 - **Windows 稳定自更新：需要按本文档继续实施**
-

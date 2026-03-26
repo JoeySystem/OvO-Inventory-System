@@ -110,6 +110,8 @@ npm start
 - `PORT`
 - `SESSION_SECRET`
 - `NODE_ENV`
+- `COOKIE_SECURE`
+- `TRUST_PROXY`
 - `DB_PATH`
 - `SESSION_DB_DIR`
 - 可选：`SESSION_DB_NAME`
@@ -117,6 +119,14 @@ npm start
 参考模板见：
 
 - [.env.example](/Users/Joey/CodexProjects/inventory-system-codex/.env.example)
+
+推荐配置：
+
+- `NODE_ENV=production`
+- `COOKIE_SECURE=auto`
+- `TRUST_PROXY=0`
+
+在 `http://localhost` 首次部署时，不要通过把 `NODE_ENV` 改成 `development` 来维持登录态。
 
 ## 数据与代码分离原则
 
@@ -149,6 +159,25 @@ npm start
 - 正式机优先更新明确 tag
 - 更新前自动备份数据库
 - 出问题可通过 `rollback.bat` 回滚
+
+## 环境兼容性
+
+当前推荐环境：
+
+- Node.js `20.x LTS` 或 `22.x LTS`
+- npm `10.x` 或 `11.x`
+- 不建议直接使用 `Node 24.x`
+
+原因：
+
+- 项目依赖 `better-sqlite3`
+- 已有 Windows 实机反馈表明 `Node 24.x` 存在兼容风险
+
+可执行环境检查：
+
+```bash
+npm run check-env
+```
 
 ## 关键文档导航
 

@@ -34,6 +34,38 @@ const bomRoutes = require('./routes/boms');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+let server = null;
+
+function resolveTrustProxy(value) {
+    if (value === undefined || value === null || value === '') {
+        return false;
+    }
+
+    const normalized = String(value).trim().toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+        return 1;
+    }
+    if (['0', 'false', 'no', 'off'].includes(normalized)) {
+        return false;
+    }
+
+    const numeric = Number(normalized);
+    return Number.isNaN(numeric) ? value : numeric;
+}
+
+function resolveCookieSecure() {
+    const configured = (process.env.COOKIE_SECURE || 'auto').trim().toLowerCase();
+
+    if (['true', '1', 'yes', 'on'].includes(configured)) {
+        return true;
+    }
+
+    if (['false', '0', 'no', 'off'].includes(configured)) {
+        return false;
+    }
+
+    return 'auto';
+}
 
 // ============================================
 // 中间件配置
@@ -81,6 +113,8 @@ if (process.env.NODE_ENV === 'development') {
     app.use(cors({ origin: true, credentials: true }));
 }
 
+app.set('trust proxy', resolveTrustProxy(process.env.TRUST_PROXY));
+
 // 请求体解析
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -104,7 +138,7 @@ app.use(session({
     saveUninitialized: false,
     cookie: {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: resolveCookieSecure(),
         sameSite: 'lax',
         maxAge: 24 * 60 * 60 * 1000  // 24小时
     }
@@ -203,48 +237,83 @@ if (!fs.existsSync(dbPath)) {
     process.exit(1);
 }
 
-const server = app.listen(PORT, () => {
-    // 获取局域网 IP
-    const os = require('os');
-    const nets = os.networkInterfaces();
-    let lanIP = '未知';
-    for (const iface of Object.values(nets)) {
-        for (const cfg of iface) {
-            if (cfg.family === 'IPv4' && !cfg.internal) {
-                lanIP = cfg.address;
-                break;
-            }
-        }
-        if (lanIP !== '未知') break;
+function startServer(port = PORT) {
+    if (server) {
+        return server;
     }
 
-    console.log('');
-    console.log('╔══════════════════════════════════════════════╗');
-    console.log('║       OvO System 物料管理系统 v1.0          ║');
-    console.log('╠══════════════════════════════════════════════╣');
-    console.log(`║  🌐 本机: http://localhost:${PORT}                ║`);
-    console.log(`║  🌐 局域网: http://${lanIP}:${PORT}`);
-    console.log(`║  📁 数据库: ${dbPath}`);
-    console.log(`║  🔧 环境: ${(process.env.NODE_ENV || 'development').padEnd(33)}║`);
-    console.log('╚══════════════════════════════════════════════╝');
-    console.log('');
-});
+    server = app.listen(port, () => {
+    // 获取局域网 IP
+        const os = require('os');
+        const nets = os.networkInterfaces();
+        let lanIP = '未知';
+        for (const iface of Object.values(nets)) {
+            for (const cfg of iface) {
+                if (cfg.family === 'IPv4' && !cfg.internal) {
+                    lanIP = cfg.address;
+                    break;
+                }
+            }
+            if (lanIP !== '未知') break;
+        }
+
+        console.log('');
+        console.log('╔══════════════════════════════════════════════╗');
+        console.log('║       OvO System 物料管理系统 v1.0          ║');
+        console.log('╠══════════════════════════════════════════════╣');
+        console.log(`║  🌐 本机: http://localhost:${port}                ║`);
+        console.log(`║  🌐 局域网: http://${lanIP}:${port}`);
+        console.log(`║  📁 数据库: ${dbPath}`);
+        console.log(`║  🔧 环境: ${(process.env.NODE_ENV || 'development').padEnd(33)}║`);
+        console.log(`║  🍪 Cookie: ${String(resolveCookieSecure()).padEnd(31)}║`);
+        console.log('╚══════════════════════════════════════════════╝');
+        console.log('');
+    });
+
+    return server;
+}
+
+function stopServer() {
+    if (server) {
+        server.close(() => {
+            closeDB();
+        });
+        server = null;
+        return;
+    }
+
+    closeDB();
+}
+
+if (process.env.SKIP_SERVER_START !== 'true') {
+    startServer(PORT);
+}
 
 // 优雅关闭
 process.on('SIGINT', () => {
     console.log('\n🛑 正在关闭服务器...');
-    server.close(() => {
-        closeDB();
-        console.log('✅ 服务器已关闭');
-        process.exit(0);
-    });
+    if (server) {
+        server.close(() => {
+            closeDB();
+            console.log('✅ 服务器已关闭');
+            process.exit(0);
+        });
+        return;
+    }
+    closeDB();
+    process.exit(0);
 });
 
 process.on('SIGTERM', () => {
-    server.close(() => {
-        closeDB();
-        process.exit(0);
-    });
+    if (server) {
+        server.close(() => {
+            closeDB();
+            process.exit(0);
+        });
+        return;
+    }
+    closeDB();
+    process.exit(0);
 });
 
-module.exports = app;  // 供测试使用
+module.exports = { app, startServer, stopServer };
