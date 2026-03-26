@@ -26,7 +26,7 @@ function printLine(label, value) {
 
 const nodeMajor = parseMajor(process.version);
 const npmMajor = parseMajor(process.env.npm_config_user_agent?.match(/npm\/(\d+)/)?.[1]);
-const supportedNodeMajors = new Set([20, 22]);
+const supportedNodeMajors = new Set([20, 22, 24]);
 const nodeSupported = supportedNodeMajors.has(nodeMajor);
 const betterSqliteCheck = canLoad('better-sqlite3');
 const dbPath = getDbPath();
@@ -43,7 +43,7 @@ printLine('COOKIE_SECURE', process.env.COOKIE_SECURE || 'auto');
 const issues = [];
 
 if (!nodeSupported) {
-    issues.push(`当前 Node.js ${process.version} 不在推荐范围内，建议使用 20.x LTS 或 22.x LTS`);
+    issues.push(`当前 Node.js ${process.version} 不在推荐范围内，建议使用 20.x / 22.x / 24.x LTS 或稳定版`);
 }
 
 if (!betterSqliteCheck.ok) {
