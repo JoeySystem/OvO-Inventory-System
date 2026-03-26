@@ -586,6 +586,53 @@ function runSupplyRiskModelMigration(db) {
     });
 }
 
+function runMaterialSupplierPricesMigration(db) {
+    if (!hasTable(db, 'materials')) return;
+
+    applyMigration(db, '018_material_supplier_prices', () => {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS material_supplier_prices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+                supplier_name TEXT NOT NULL,
+                supplier_code TEXT,
+                quoted_price REAL DEFAULT 0,
+                quoted_discount REAL DEFAULT 1,
+                effective_price REAL DEFAULT 0,
+                last_purchase_price REAL DEFAULT 0,
+                last_purchase_discount REAL DEFAULT 1,
+                last_purchase_effective_price REAL DEFAULT 0,
+                last_purchase_at TEXT,
+                unit TEXT,
+                spec TEXT,
+                model TEXT,
+                currency TEXT DEFAULT 'CNY',
+                is_default INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                notes TEXT,
+                raw_source TEXT,
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_material_supplier_prices_material ON material_supplier_prices(material_id);
+            CREATE INDEX IF NOT EXISTS idx_material_supplier_prices_supplier ON material_supplier_prices(supplier_name);
+        `);
+    });
+}
+
+function runMaterialSupplierPricesAlignmentMigration(db) {
+    if (!hasTable(db, 'material_supplier_prices')) return;
+
+    applyMigration(db, '019_material_supplier_prices_alignment', () => {
+        addColumnIfMissing(db, 'material_supplier_prices', 'source_platform', "TEXT DEFAULT 'offline'");
+        db.exec(`
+            UPDATE material_supplier_prices
+            SET source_platform = COALESCE(NULLIF(TRIM(source_platform), ''), 'offline')
+        `);
+    });
+}
+
 function runProductionSubstitutionWorkflowMigration(db) {
     applyMigration(db, '015_production_substitution_workflow', () => {
         if (hasTable(db, 'sop_materials')) {
@@ -630,6 +677,8 @@ function runMigrations(db) {
     runDualWarningModelMigration(db);
     runMaterialSupplierEnrichmentMigration(db);
     runSupplyRiskModelMigration(db);
+    runMaterialSupplierPricesMigration(db);
+    runMaterialSupplierPricesAlignmentMigration(db);
     runProductionSubstitutionWorkflowMigration(db);
 }
 

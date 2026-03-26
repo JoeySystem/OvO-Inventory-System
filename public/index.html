@@ -1833,6 +1833,9 @@
                                 <label class="block text-sm font-medium text-gray-700 mb-1">备注</label>
                                 <textarea v-model="form.notes" rows="3" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500 resize-none"></textarea>
                             </div>
+                            <div class="rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-xs text-sky-700">
+                                “提交单据”仅保存为“已提交”，不会立即变更库存；如需当前页面录入后立即生效，请使用“一键提交并执行记账”。
+                            </div>
                             <div v-if="formError" class="bg-red-50 text-red-600 text-sm rounded-lg px-3 py-2">{{ formError }}</div>
                             <div class="flex gap-3">
                                 <button type="button" @click="saveDraft" :disabled="submitting || !canExecute" class="flex-1 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm py-2.5 rounded-lg transition disabled:opacity-50">
@@ -1840,6 +1843,9 @@
                                 </button>
                                 <button type="button" @click="submitDocumentForm" :disabled="submitting || !canExecute" class="flex-1 text-white text-sm py-2.5 rounded-lg transition disabled:opacity-50" :class="config.submitClass">
                                     {{ submitting ? '处理中...' : '提交单据' }}
+                                </button>
+                                <button type="button" @click="submitAndPostDocumentForm" :disabled="submitting || !canExecute" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-sm py-2.5 rounded-lg transition disabled:opacity-50">
+                                    {{ submitting ? '处理中...' : '一键提交并执行记账' }}
                                 </button>
                                 <button type="button" @click="resetForm" class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm py-2.5 rounded-lg transition">重置</button>
                             </div>
@@ -1886,7 +1892,7 @@
                                     </div>
                                 </div>
                             </div>
-                            <p v-else class="mt-3 text-sm text-indigo-600">保存草稿或提交单据后，这里会显示最近一张单据及其当前状态。</p>
+                            <p v-else class="mt-3 text-sm text-indigo-600">保存草稿、提交单据或一键执行后，这里会显示最近一张单据及其当前状态。</p>
                         </div>
                     </div>
                 </div>
@@ -2328,7 +2334,13 @@
                     };
                 }
 
-                async function createDocument(mode) {
+                async function finalizeDocumentLifecycle(documentId) {
+                    let result = await api.post(`/api/stock-documents/${documentId}/execute`);
+                    result = await api.post(`/api/stock-documents/${documentId}/post`);
+                    return result;
+                }
+
+                async function createDocument(mode, autoProcess = false) {
                     formError.value = '';
                     submitting.value = true;
                     try {
@@ -2338,15 +2350,25 @@
                             result = await api.put('/api/stock-documents/' + draftId, buildDocumentPayload());
                             if (mode === 'submit') {
                                 result = await api.post(`/api/stock-documents/${draftId}/submit`);
+                                if (autoProcess) {
+                                    result = await finalizeDocumentLifecycle(draftId);
+                                }
                             }
                         } else {
                             result = await api.post('/api/stock-documents', { ...buildDocumentPayload(), mode });
+                            if (mode === 'submit' && autoProcess && result.document?.id) {
+                                result = await finalizeDocumentLifecycle(result.document.id);
+                            }
                         }
                         lastSubmittedDoc.value = result.document || null;
                         showToast(
                             editingDocumentId.value
-                                ? (mode === 'submit' ? '草稿已更新并提交' : '草稿已更新')
-                                : (mode === 'submit' ? '单据已提交，等待执行' : '草稿已保存'),
+                                ? (mode === 'submit'
+                                    ? (autoProcess ? '草稿已更新并执行记账' : '草稿已更新并提交')
+                                    : '草稿已更新')
+                                : (mode === 'submit'
+                                    ? (autoProcess ? '单据已提交并执行记账' : '单据已提交，等待执行')
+                                    : '草稿已保存'),
                             'success'
                         );
                         editingDocumentId.value = null;
@@ -2369,6 +2391,10 @@
 
                 async function submitDocumentForm() {
                     await createDocument('submit');
+                }
+
+                async function submitAndPostDocumentForm() {
+                    await createDocument('submit', true);
                 }
 
                 async function changeDocumentStatus(document, action) {
@@ -2597,7 +2623,7 @@
 
                 return {
                     config, warehouses, materials, stockSnapshot, lastSubmittedDoc, editingDocumentId, selectedDocument, viewMode, movementItems, movementSummary, movementPagination, documentPagination, loadingMovements, loadingDocuments, activePagination, activeLoading, canExecute,
-                    documentItems, documentStatusCards, totalMovementQuantity, rangeLabel, filterSummaryLabel, filters, form, formError, submitting, saveDraft, submitDocumentForm, changeDocumentStatus, editDraftDocument, formatDocumentStatus, documentStatusClass, resetForm, applyFilters, resetFilters, changePage, setViewMode, selectDocument, exportMovements, exportDocument, printDocument
+                    documentItems, documentStatusCards, totalMovementQuantity, rangeLabel, filterSummaryLabel, filters, form, formError, submitting, saveDraft, submitDocumentForm, submitAndPostDocumentForm, changeDocumentStatus, editDraftDocument, formatDocumentStatus, documentStatusClass, resetForm, applyFilters, resetFilters, changePage, setViewMode, selectDocument, exportMovements, exportDocument, printDocument
                 };
             }
         };
@@ -2701,10 +2727,14 @@
                             <label class="block text-sm font-medium text-gray-700 mb-1">备注</label>
                             <textarea v-model="form.notes" rows="3" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500 resize-none"></textarea>
                         </div>
+                        <div class="rounded-lg border border-cyan-100 bg-cyan-50 px-3 py-2 text-xs text-cyan-700">
+                            “提交单据”仅保存为“已提交”，不会立即变更库存位置；如需当前页面录入后立即完成调拨，请使用“一键提交并执行记账”。
+                        </div>
                         <div v-if="formError" class="bg-red-50 text-red-600 text-sm rounded-lg px-3 py-2">{{ formError }}</div>
                         <div class="flex gap-3">
                             <button type="button" @click="saveDraft" :disabled="submitting || !canExecute" class="flex-1 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm py-2.5 rounded-lg transition disabled:opacity-50">保存草稿</button>
                             <button type="button" @click="submitDocumentForm" :disabled="submitting || !canExecute" class="flex-1 bg-cyan-600 hover:bg-cyan-700 text-white text-sm py-2.5 rounded-lg transition disabled:opacity-50">提交单据</button>
+                            <button type="button" @click="submitAndPostDocumentForm" :disabled="submitting || !canExecute" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-sm py-2.5 rounded-lg transition disabled:opacity-50">一键提交并执行记账</button>
                             <button type="button" @click="resetForm" class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm py-2.5 rounded-lg transition">重置</button>
                         </div>
                     </form>
@@ -2749,7 +2779,7 @@
                                 </div>
                             </div>
                         </div>
-                        <p v-else class="mt-3 text-sm text-cyan-600">保存草稿或提交单据后，这里会显示最近一张单据及其当前状态。</p>
+                        <p v-else class="mt-3 text-sm text-cyan-600">保存草稿、提交单据或一键执行后，这里会显示最近一张单据及其当前状态。</p>
                     </div>
                 </div>
             </div>
@@ -3147,7 +3177,13 @@
                 };
             }
 
-            async function createDocument(mode) {
+            async function finalizeDocumentLifecycle(documentId) {
+                let result = await api.post(`/api/stock-documents/${documentId}/execute`);
+                result = await api.post(`/api/stock-documents/${documentId}/post`);
+                return result;
+            }
+
+            async function createDocument(mode, autoProcess = false) {
                 formError.value = '';
                 submitting.value = true;
                 try {
@@ -3157,15 +3193,25 @@
                         result = await api.put('/api/stock-documents/' + draftId, buildDocumentPayload());
                         if (mode === 'submit') {
                             result = await api.post(`/api/stock-documents/${draftId}/submit`);
+                            if (autoProcess) {
+                                result = await finalizeDocumentLifecycle(draftId);
+                            }
                         }
                     } else {
                         result = await api.post('/api/stock-documents', { ...buildDocumentPayload(), mode });
+                        if (mode === 'submit' && autoProcess && result.document?.id) {
+                            result = await finalizeDocumentLifecycle(result.document.id);
+                        }
                     }
                     lastSubmittedDoc.value = result.document || null;
                     showToast(
                         editingDocumentId.value
-                            ? (mode === 'submit' ? '调拨草稿已更新并提交' : '调拨草稿已更新')
-                            : (mode === 'submit' ? '调拨单已提交，等待执行' : '调拨草稿已保存'),
+                            ? (mode === 'submit'
+                                ? (autoProcess ? '调拨草稿已更新并执行记账' : '调拨草稿已更新并提交')
+                                : '调拨草稿已更新')
+                            : (mode === 'submit'
+                                ? (autoProcess ? '调拨单已提交并执行记账' : '调拨单已提交，等待执行')
+                                : '调拨草稿已保存'),
                         'success'
                     );
                     editingDocumentId.value = null;
@@ -3180,6 +3226,7 @@
 
             async function saveDraft() { await createDocument('draft'); }
             async function submitDocumentForm() { await createDocument('submit'); }
+            async function submitAndPostDocumentForm() { await createDocument('submit', true); }
 
                 async function changeDocumentStatus(document, action) {
                     if (!document?.id) return;
@@ -3374,7 +3421,7 @@
 
             return {
                 warehouses, materials, stockSnapshot, lastSubmittedDoc, editingDocumentId, selectedDocument, viewMode, movementItems, movementSummary, movementPagination, documentPagination, loadingMovements, loadingDocuments, activePagination, activeLoading, canExecute,
-                documentItems, documentStatusCards, totalMovementQuantity, rangeLabel, filterSummaryLabel, filters, form, formError, submitting, saveDraft, submitDocumentForm, changeDocumentStatus, editDraftDocument, formatDocumentStatus, documentStatusClass, resetForm, applyFilters, resetFilters, changePage, setViewMode, selectDocument, exportMovements, exportDocument, printDocument
+                documentItems, documentStatusCards, totalMovementQuantity, rangeLabel, filterSummaryLabel, filters, form, formError, submitting, saveDraft, submitDocumentForm, submitAndPostDocumentForm, changeDocumentStatus, editDraftDocument, formatDocumentStatus, documentStatusClass, resetForm, applyFilters, resetFilters, changePage, setViewMode, selectDocument, exportMovements, exportDocument, printDocument
             };
         }
     };
@@ -3430,10 +3477,14 @@
                             <label class="block text-sm font-medium text-gray-700 mb-1">调整原因</label>
                             <textarea v-model="form.notes" rows="3" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500 resize-none"></textarea>
                         </div>
+                        <div class="rounded-lg border border-rose-100 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                            “提交单据”仅保存为“已提交”，不会立即校正库存；如需当前页面录入后立即完成盘点记账，请使用“一键提交并执行记账”。
+                        </div>
                         <div v-if="formError" class="bg-red-50 text-red-600 text-sm rounded-lg px-3 py-2">{{ formError }}</div>
                         <div class="flex gap-3">
                             <button type="button" @click="saveDraft" :disabled="submitting || !canExecute" class="flex-1 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm py-2.5 rounded-lg transition disabled:opacity-50">保存草稿</button>
                             <button type="button" @click="submitDocumentForm" :disabled="submitting || !canExecute" class="flex-1 bg-rose-600 hover:bg-rose-700 text-white text-sm py-2.5 rounded-lg transition disabled:opacity-50">提交单据</button>
+                            <button type="button" @click="submitAndPostDocumentForm" :disabled="submitting || !canExecute" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-sm py-2.5 rounded-lg transition disabled:opacity-50">一键提交并执行记账</button>
                             <button type="button" @click="resetForm" class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm py-2.5 rounded-lg transition">重置</button>
                         </div>
                     </form>
@@ -3484,7 +3535,7 @@
                                 </div>
                             </div>
                         </div>
-                        <p v-else class="mt-3 text-sm text-rose-600">保存草稿或提交单据后，这里会显示最近一张单据及其当前状态。</p>
+                        <p v-else class="mt-3 text-sm text-rose-600">保存草稿、提交单据或一键执行后，这里会显示最近一张单据及其当前状态。</p>
                     </div>
                 </div>
             </div>
@@ -3879,7 +3930,13 @@
                 };
             }
 
-            async function createDocument(mode) {
+            async function finalizeDocumentLifecycle(documentId) {
+                let result = await api.post(`/api/stock-documents/${documentId}/execute`);
+                result = await api.post(`/api/stock-documents/${documentId}/post`);
+                return result;
+            }
+
+            async function createDocument(mode, autoProcess = false) {
                 formError.value = '';
                 submitting.value = true;
                 try {
@@ -3889,15 +3946,25 @@
                         result = await api.put('/api/stock-documents/' + draftId, buildDocumentPayload());
                         if (mode === 'submit') {
                             result = await api.post(`/api/stock-documents/${draftId}/submit`);
+                            if (autoProcess) {
+                                result = await finalizeDocumentLifecycle(draftId);
+                            }
                         }
                     } else {
                         result = await api.post('/api/stock-documents', { ...buildDocumentPayload(), mode });
+                        if (mode === 'submit' && autoProcess && result.document?.id) {
+                            result = await finalizeDocumentLifecycle(result.document.id);
+                        }
                     }
                     lastSubmittedDoc.value = result.document || null;
                     showToast(
                         editingDocumentId.value
-                            ? (mode === 'submit' ? '盘点草稿已更新并提交' : '盘点草稿已更新')
-                            : (mode === 'submit' ? '盘点单已提交，等待执行' : '盘点草稿已保存'),
+                            ? (mode === 'submit'
+                                ? (autoProcess ? '盘点草稿已更新并执行记账' : '盘点草稿已更新并提交')
+                                : '盘点草稿已更新')
+                            : (mode === 'submit'
+                                ? (autoProcess ? '盘点单已提交并执行记账' : '盘点单已提交，等待执行')
+                                : '盘点草稿已保存'),
                         'success'
                     );
                     editingDocumentId.value = null;
@@ -3913,6 +3980,7 @@
 
             async function saveDraft() { await createDocument('draft'); }
             async function submitDocumentForm() { await createDocument('submit'); }
+            async function submitAndPostDocumentForm() { await createDocument('submit', true); }
 
                 async function changeDocumentStatus(document, action) {
                     if (!document?.id) return;
@@ -4108,7 +4176,7 @@
             return {
                 warehouses, materials, stockSnapshot, lastSubmittedDoc, editingDocumentId, selectedDocument, viewMode, movementItems, movementSummary, movementPagination, documentPagination, loadingMovements, loadingDocuments, activePagination, activeLoading, canExecute,
                 documentItems, documentStatusCards, totalMovementQuantity, rangeLabel, filterSummaryLabel, filters, form, formError, submitting, normalizedActualQuantity, deltaQuantity,
-                saveDraft, submitDocumentForm, changeDocumentStatus, editDraftDocument, formatDocumentStatus, documentStatusClass, resetForm, applyFilters, resetFilters, changePage, setViewMode, selectDocument, exportMovements, exportDocument, printDocument
+                saveDraft, submitDocumentForm, submitAndPostDocumentForm, changeDocumentStatus, editDraftDocument, formatDocumentStatus, documentStatusClass, resetForm, applyFilters, resetFilters, changePage, setViewMode, selectDocument, exportMovements, exportDocument, printDocument
             };
         }
     };
@@ -4723,10 +4791,20 @@
 	            <!-- 导入弹窗 -->
             <div v-if="showImportModal" class="fixed inset-0 bg-black/40 flex items-center justify-center z-40" @click.self="closeImportModal">
                 <div class="bg-white rounded-xl shadow-xl w-full max-w-lg p-6 mx-4">
-                    <h3 class="text-lg font-semibold text-gray-800 mb-4">批量导入物料</h3>
+                    <div class="flex items-center justify-between gap-3 mb-4">
+                        <h3 class="text-lg font-semibold text-gray-800">批量导入物料</h3>
+                        <div class="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-1">
+                            <button @click="switchImportMode('standard')" type="button" class="px-3 py-1.5 text-xs rounded-md transition"
+                                    :class="importMode === 'standard' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'">模板导入</button>
+                            <button @click="switchImportMode('inventoryWorkbook')" type="button" class="px-3 py-1.5 text-xs rounded-md transition"
+                                    :class="importMode === 'inventoryWorkbook' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'">库存状况表</button>
+                            <button @click="switchImportMode('supplierPriceWorkbook')" type="button" class="px-3 py-1.5 text-xs rounded-md transition"
+                                    :class="importMode === 'supplierPriceWorkbook' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'">供应商价格本</button>
+                        </div>
+                    </div>
 
                     <!-- 步骤1：下载模板 -->
-                    <div class="bg-indigo-50 rounded-lg p-4 mb-4">
+                    <div v-if="importMode === 'standard'" class="bg-indigo-50 rounded-lg p-4 mb-4">
                         <p class="text-sm text-indigo-800 font-medium mb-2">第一步：下载导入模板</p>
                         <p class="text-xs text-indigo-600 mb-3">请按模板格式填写数据，支持 Excel / CSV / JSON 格式</p>
                         <div class="flex gap-2">
@@ -4739,6 +4817,14 @@
                                 <i data-lucide="file-text" class="w-3.5 h-3.5"></i> CSV 模板
                             </a>
                         </div>
+                    </div>
+                    <div v-else-if="importMode === 'inventoryWorkbook'" class="bg-amber-50 rounded-lg p-4 mb-4 border border-amber-200">
+                        <p class="text-sm text-amber-800 font-medium mb-1">库存状况表导入说明</p>
+                        <p class="text-xs text-amber-700 leading-5">适用于“库存状况表（商品库存）”一类真实业务报表。系统会自动识别表头，按商品编号更新物料主档，并把账面库存同步到当前默认仓库。</p>
+                    </div>
+                    <div v-else class="bg-emerald-50 rounded-lg p-4 mb-4 border border-emerald-200">
+                        <p class="text-sm text-emerald-800 font-medium mb-1">供应商价格本导入说明</p>
+                        <p class="text-xs text-emerald-700 leading-5">适用于供应商价格本一类采购参考表。系统会按商品编号或商品名称匹配现有物料，导入供应商报价、最近采购价和最近采购时间。</p>
                     </div>
 
                     <!-- 步骤2：上传文件 -->
@@ -4755,7 +4841,7 @@
                                 点击选择文件
                                 <input type="file" class="hidden" accept=".csv,.xlsx,.xls,.json" @change="handleImportFile($event)">
                             </label>
-                            <p class="text-xs text-gray-400 mt-2">支持 .xlsx / .csv / .json（最大5MB，最多500条）</p>
+                            <p class="text-xs text-gray-400 mt-2">{{ importMode === 'standard' ? '支持 .xlsx / .csv / .json（最大5MB，最多500条）' : (importMode === 'inventoryWorkbook' ? '支持 .xlsx 库存状况表（最大5MB）' : '支持 .xlsx 供应商价格本（最大5MB）') }}</p>
                         </div>
                         <div v-if="importFile" class="mt-2 flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
                             <i data-lucide="file" class="w-4 h-4 text-gray-500"></i>
@@ -4763,18 +4849,37 @@
                             <span class="text-xs text-gray-400">{{ (importFile.size / 1024).toFixed(1) }}KB</span>
                             <button @click="handleImportFile({ target: { files: [] } })" class="text-red-400 hover:text-red-600"><i data-lucide="x" class="w-4 h-4"></i></button>
                         </div>
+                        <div v-if="importHint" class="mt-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                            {{ importHint }}
+                        </div>
                     </div>
 
 	                    <!-- 预览结果 -->
 	                    <div v-if="importPreview" class="mb-4">
 	                        <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-2">
-	                            <p class="text-sm text-blue-800">
+	                            <p class="text-sm text-blue-800" v-if="importMode === 'standard'">
 	                                <span class="font-semibold">预校验完成</span>
 	                                共 {{ importPreview.summary.total }} 条，
 	                                可新增 <span class="font-bold text-blue-700">{{ importPreview.summary.creatable }}</span> 条，
 	                                可更新 <span class="font-bold text-emerald-700">{{ importPreview.summary.updatable }}</span> 条，
 	                                无效 <span class="font-bold text-red-600">{{ importPreview.summary.invalid }}</span> 条
 	                            </p>
+                                <p class="text-sm text-blue-800" v-else-if="importMode === 'inventoryWorkbook'">
+                                    <span class="font-semibold">库存状况表识别完成</span>
+                                    共 {{ importPreview.summary.total }} 条，
+                                    可新增 <span class="font-bold text-blue-700">{{ importPreview.summary.creatable }}</span> 条，
+                                    可更新 <span class="font-bold text-emerald-700">{{ importPreview.summary.updatable }}</span> 条，
+                                    将同步库存 <span class="font-bold text-indigo-700">{{ importPreview.summary.stockSyncable }}</span> 条
+                                    <span v-if="importPreview.warehouse" class="ml-1">到 {{ importPreview.warehouse.name }}</span>
+                                </p>
+                                <p class="text-sm text-blue-800" v-else>
+                                    <span class="font-semibold">供应商价格本识别完成</span>
+                                    共 {{ importPreview.summary.total }} 条，
+                                    可新增 <span class="font-bold text-blue-700">{{ importPreview.summary.creatable }}</span> 条，
+                                    可更新 <span class="font-bold text-emerald-700">{{ importPreview.summary.updatable }}</span> 条，
+                                    未匹配 <span class="font-bold text-amber-700">{{ importPreview.summary.unmatched }}</span> 条，
+                                    无效 <span class="font-bold text-red-600">{{ importPreview.summary.invalid }}</span> 条
+                                </p>
 	                        </div>
 	                        <div v-if="importPreview.items && importPreview.items.some(item => item.errors && item.errors.length > 0)" class="bg-red-50 border border-red-200 rounded-lg p-3 max-h-40 overflow-y-auto">
 	                            <p class="text-xs font-medium text-red-700 mb-1">预览错误：</p>
@@ -4787,11 +4892,23 @@
 	                    <!-- 导入结果 -->
 	                    <div v-if="importResult" class="mb-4">
 	                        <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 mb-2">
-	                            <p class="text-sm text-emerald-800">
+	                            <p class="text-sm text-emerald-800" v-if="importMode === 'standard'">
 	                                <span class="font-semibold">导入完成!</span>
 	                                共 {{ importResult.total }} 条，新增 <span class="font-bold text-emerald-700">{{ importResult.imported }}</span> 条，
 	                                更新 <span class="font-bold text-blue-700">{{ importResult.updated }}</span> 条
 	                            </p>
+                                <p class="text-sm text-emerald-800" v-else-if="importMode === 'inventoryWorkbook'">
+                                    <span class="font-semibold">库存状况表导入完成!</span>
+                                    共 {{ importResult.total }} 条，新增 <span class="font-bold text-emerald-700">{{ importResult.imported }}</span> 条，
+                                    更新 <span class="font-bold text-blue-700">{{ importResult.updated }}</span> 条，
+                                    同步库存 <span class="font-bold text-indigo-700">{{ importResult.stockUpdated }}</span> 条
+                                </p>
+                                <p class="text-sm text-emerald-800" v-else>
+                                    <span class="font-semibold">供应商价格本导入完成!</span>
+                                    共 {{ importResult.total }} 条，新增 <span class="font-bold text-emerald-700">{{ importResult.imported }}</span> 条，
+                                    更新 <span class="font-bold text-blue-700">{{ importResult.updated }}</span> 条，
+                                    补充供应商关系 <span class="font-bold text-indigo-700">{{ importResult.supplierLinksCreated || 0 }}</span> 条
+                                </p>
 	                        </div>
 	                    </div>
 
@@ -5049,6 +5166,33 @@
                                                 </div>
                                             </div>
                                             <div v-if="detailData.suppliers.length === 0" class="text-sm text-gray-400">暂无供应商配置</div>
+                                        </div>
+                                        <div class="mt-4">
+                                            <div class="text-xs font-medium text-gray-500 mb-2">供应商报价记录</div>
+                                            <div class="space-y-2">
+                                                <div v-for="price in detailData.supplierPrices" :key="'price-' + price.id" class="rounded-lg border border-emerald-200 bg-emerald-50/50 px-3 py-3">
+                                                    <div class="flex items-start justify-between gap-3">
+                                                        <div>
+                                                            <div class="text-sm font-medium text-gray-800">{{ price.supplier_name }}</div>
+                                                            <div class="mt-1 text-xs text-gray-500">
+                                                                {{ price.supplier_code || '无供应商编号' }}
+                                                                <span v-if="price.is_default"> · 默认采购来源</span>
+                                                            </div>
+                                                        </div>
+                                                        <div class="text-right text-xs text-emerald-700">
+                                                            <div v-if="price.effective_price !== null && price.effective_price !== undefined">当前折后价 ¥{{ Number(price.effective_price || 0).toFixed(2) }}</div>
+                                                            <div v-else-if="price.quoted_price !== null && price.quoted_price !== undefined">当前报价 ¥{{ Number(price.quoted_price || 0).toFixed(2) }}</div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-gray-500">
+                                                        <div>当前报价：{{ price.quoted_price !== null && price.quoted_price !== undefined ? ('¥' + Number(price.quoted_price || 0).toFixed(2)) : '-' }} <span v-if="price.quoted_discount !== null && price.quoted_discount !== undefined">· 折扣 {{ Number(price.quoted_discount || 1).toFixed(2) }}</span></div>
+                                                        <div>最近采购：{{ price.last_purchase_effective_price !== null && price.last_purchase_effective_price !== undefined ? ('¥' + Number(price.last_purchase_effective_price || 0).toFixed(2)) : (price.last_purchase_price !== null && price.last_purchase_price !== undefined ? ('¥' + Number(price.last_purchase_price || 0).toFixed(2)) : '-') }}</div>
+                                                        <div>最近采购时间：{{ price.last_purchase_at || '-' }}</div>
+                                                        <div>规格/型号：{{ price.spec || '-' }}<span v-if="price.model"> · {{ price.model }}</span></div>
+                                                    </div>
+                                                </div>
+                                                <div v-if="detailData.supplierPrices.length === 0" class="text-sm text-gray-400">暂无供应商报价记录</div>
+                                            </div>
                                         </div>
                                     </div>
                                     <div v-if="showSupplierForm && canAction('materials', 'edit') && detailData.material.lifecycle_status !== 'obsolete'" class="rounded-lg border border-emerald-200 bg-emerald-50 p-3 space-y-3">
@@ -5406,6 +5550,7 @@
 
             // 导入
 	            const showImportModal = ref(false);
+	            const importMode = ref('standard');
 	            const importFile = ref(null);
 	            const importLoading = ref(false);
 	            const importError = ref('');
@@ -5413,13 +5558,43 @@
 	            const importPreview = ref(null);
 	            const importPreviewToken = ref('');
 	            const importDragOver = ref(false);
+	            const importHint = ref('');
+
+	            function isInventoryWorkbookFile(file) {
+	                const fileName = String(file?.name || '').toLowerCase();
+	                return fileName.includes('库存状况表') || fileName.includes('商品库存');
+	            }
+	            function isSupplierPriceWorkbookFile(file) {
+	                const fileName = String(file?.name || '').toLowerCase();
+	                return fileName.includes('供应商价格本') || fileName.includes('价格本');
+	            }
+
+	            function switchImportMode(mode) {
+	                importMode.value = mode;
+	                importFile.value = null;
+	                importError.value = '';
+	                importHint.value = '';
+	                importResult.value = null;
+	                importPreview.value = null;
+	                importPreviewToken.value = '';
+	            }
 
 	            function handleImportFile(e) {
 	                importFile.value = e.target.files[0] || null;
 	                importError.value = '';
+	                importHint.value = '';
 	                importResult.value = null;
 	                importPreview.value = null;
 	                importPreviewToken.value = '';
+	                if (importFile.value) {
+	                    if (isInventoryWorkbookFile(importFile.value) && importMode.value !== 'inventoryWorkbook') {
+	                        importMode.value = 'inventoryWorkbook';
+	                        importHint.value = '已根据文件名自动切换到“库存状况表”导入模式。';
+	                    } else if (isSupplierPriceWorkbookFile(importFile.value) && importMode.value !== 'supplierPriceWorkbook') {
+	                        importMode.value = 'supplierPriceWorkbook';
+	                        importHint.value = '已根据文件名自动切换到“供应商价格本”导入模式。';
+	                    }
+	                }
 	            }
 	            function handleImportDrop(e) {
 	                importDragOver.value = false;
@@ -5427,9 +5602,17 @@
 	                if (file) {
 	                    importFile.value = file;
 	                    importError.value = '';
+	                    importHint.value = '';
 	                    importResult.value = null;
 	                    importPreview.value = null;
 	                    importPreviewToken.value = '';
+	                    if (isInventoryWorkbookFile(file) && importMode.value !== 'inventoryWorkbook') {
+	                        importMode.value = 'inventoryWorkbook';
+	                        importHint.value = '已根据文件名自动切换到“库存状况表”导入模式。';
+	                    } else if (isSupplierPriceWorkbookFile(file) && importMode.value !== 'supplierPriceWorkbook') {
+	                        importMode.value = 'supplierPriceWorkbook';
+	                        importHint.value = '已根据文件名自动切换到“供应商价格本”导入模式。';
+	                    }
 	                }
 	            }
 	            async function submitImport() {
@@ -5437,20 +5620,30 @@
 	                importLoading.value = true;
 	                importError.value = '';
 	                try {
+	                        const isInventoryWorkbook = importMode.value === 'inventoryWorkbook';
+	                        const isSupplierPriceWorkbook = importMode.value === 'supplierPriceWorkbook';
 	                    if (!importPreviewToken.value) {
 	                        importResult.value = null;
 	                        const formData = new FormData();
 	                        formData.append('file', importFile.value);
-	                        const resp = await fetch('/api/materials/import/preview', { method: 'POST', body: formData, credentials: 'same-origin' });
+	                        const previewUrl = isInventoryWorkbook
+	                            ? '/api/materials/import/inventory-workbook/preview'
+	                            : (isSupplierPriceWorkbook ? '/api/materials/import/supplier-price-workbook/preview' : '/api/materials/import/preview');
+	                        const resp = await fetch(previewUrl, { method: 'POST', body: formData, credentials: 'same-origin' });
 	                        const json = await resp.json();
 	                        if (!json.success) throw new Error(json.error?.message || '预校验失败');
 	                        importPreview.value = json.data;
 	                        importPreviewToken.value = json.data.previewToken;
 	                    } else {
-	                        const data = await api.post('/api/materials/import/commit', {
-	                            previewToken: importPreviewToken.value,
-	                            mode: 'all_or_nothing'
-	                        });
+	                        const commitUrl = isInventoryWorkbook
+	                            ? '/api/materials/import/inventory-workbook/commit'
+	                            : (isSupplierPriceWorkbook ? '/api/materials/import/supplier-price-workbook/commit' : '/api/materials/import/commit');
+	                        const commitPayload = isInventoryWorkbook
+	                            ? { previewToken: importPreviewToken.value }
+	                            : (isSupplierPriceWorkbook
+	                                ? { previewToken: importPreviewToken.value }
+	                                : { previewToken: importPreviewToken.value, mode: 'all_or_nothing' });
+	                        const data = await api.post(commitUrl, commitPayload);
 	                        importResult.value = data;
 	                        importPreviewToken.value = '';
 	                        if ((data.imported || 0) + (data.updated || 0) > 0) {
@@ -5459,15 +5652,19 @@
 	                        }
 	                    }
 	                } catch (err) {
-	                    importError.value = err.message;
+	                    importError.value = err.message === 'Failed to fetch'
+	                        ? '导入请求未完成。若导入的是“库存状况表（商品库存）”，请切换到“库存状况表”标签后再试。'
+	                        : err.message;
 	                } finally {
 	                    importLoading.value = false;
 	                }
             }
-            function closeImportModal() {
+	            function closeImportModal() {
 	                showImportModal.value = false;
+	                importMode.value = 'standard';
 	                importFile.value = null;
 	                importError.value = '';
+	                importHint.value = '';
 	                importResult.value = null;
 	                importPreview.value = null;
 	                importPreviewToken.value = '';
@@ -6149,8 +6346,8 @@
 	                showDuplicatesModal, duplicatesLoading, duplicateRule, duplicateGroups, duplicateMasterMap, showAllBomUsages, substitutionRecommendedMaterials,
 	                showCategoryModal, newCategoryName, canAction,
 	                showExportMenu, exportDropdownRef,
-	                showImportModal, importFile, importLoading, importError, importResult, importPreview, importPreviewToken, importDragOver,
-	                handleImportFile, handleImportDrop, submitImport, closeImportModal,
+	                showImportModal, importMode, importFile, importLoading, importError, importResult, importPreview, importPreviewToken, importDragOver,
+	                switchImportMode, handleImportFile, handleImportDrop, submitImport, closeImportModal,
 	                debouncedSearch, loadMaterials, openCreateModal, editMaterial, submitMaterial, deleteMaterial,
 	                createCategory, deleteCategory, goPage, materialTypeLabel, supplyModeLabel, supplyModeHint, lifecycleLabel, lifecycleClass,
 	                supplyRiskLevelLabel, supplyRiskLevelClass,
@@ -6787,6 +6984,7 @@
                     const [whData, mData] = await Promise.all([api.get('/api/warehouses'), api.get('/api/materials?limit=200')]);
                     warehouses.value = whData.warehouses;
                     allMaterials.value = mData.materials;
+                    addItem();
                 } catch (e) { console.error(e); }
                 nextTick(() => lucide.createIcons());
             }
@@ -10428,6 +10626,10 @@
                     </select>
                 </div>
                 <div class="flex items-center gap-2">
+                    <button v-if="canAction('boms', 'add')" @click="showBomImportModal = true"
+                            class="bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-sm px-4 py-2 rounded-lg transition flex items-center gap-1.5">
+                        <i data-lucide="upload" class="w-4 h-4"></i> 导入生产模板
+                    </button>
                     <button v-if="canAction('boms', 'add')" @click="openCreate"
                             class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm px-4 py-2 rounded-lg transition flex items-center gap-1.5">
                         <i data-lucide="plus" class="w-4 h-4"></i> 新建BOM
@@ -10804,6 +11006,79 @@
                     <button @click="showVersionModal=false" class="w-full mt-4 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm py-2 rounded-lg transition">关闭</button>
                 </div>
             </div>
+
+            <div v-if="showBomImportModal" class="fixed inset-0 bg-black/40 flex items-center justify-center z-40" @click.self="closeBomImportModal">
+                <div class="bg-white rounded-xl shadow-xl w-full max-w-3xl p-6 mx-4 max-h-[90vh] overflow-y-auto">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">导入生产模板明细</h3>
+                    <div class="bg-purple-50 border border-purple-200 rounded-lg p-4 mb-4">
+                        <p class="text-sm text-purple-800 font-medium mb-1">适用文件</p>
+                        <p class="text-xs text-purple-700 leading-5">用于导入“生产模板明细”Excel。系统会按模板编号分组，自动匹配产出物料和明细物料，并更新或新建 BOM。</p>
+                    </div>
+
+                    <div class="mb-4">
+                        <div class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center transition"
+                             :class="bomImportDragOver ? 'border-purple-500 bg-purple-50' : ''"
+                             @dragover.prevent="bomImportDragOver = true"
+                             @dragleave.prevent="bomImportDragOver = false"
+                             @drop.prevent="handleBomImportDrop($event)">
+                            <i data-lucide="upload-cloud" class="w-8 h-8 text-gray-400 mx-auto mb-2"></i>
+                            <p class="text-sm text-gray-500 mb-1">拖拽生产模板明细文件到此处，或</p>
+                            <label class="text-purple-600 hover:text-purple-700 text-sm cursor-pointer font-medium">
+                                点击选择文件
+                                <input type="file" class="hidden" accept=".xlsx,.xls" @change="handleBomImportFile($event)">
+                            </label>
+                            <p class="text-xs text-gray-400 mt-2">支持 .xlsx / .xls（最大8MB）</p>
+                        </div>
+                        <div v-if="bomImportFile" class="mt-2 flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
+                            <i data-lucide="file" class="w-4 h-4 text-gray-500"></i>
+                            <span class="text-sm text-gray-700 flex-1">{{ bomImportFile.name }}</span>
+                            <span class="text-xs text-gray-400">{{ (bomImportFile.size / 1024).toFixed(1) }}KB</span>
+                            <button @click="handleBomImportFile({ target: { files: [] } })" class="text-red-400 hover:text-red-600"><i data-lucide="x" class="w-4 h-4"></i></button>
+                        </div>
+                    </div>
+
+                    <div v-if="bomImportPreview" class="mb-4">
+                        <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-2">
+                            <p class="text-sm text-blue-800">
+                                <span class="font-semibold">预校验完成</span>
+                                共 {{ bomImportPreview.summary.total }} 个 BOM，
+                                可新增 <span class="font-bold text-blue-700">{{ bomImportPreview.summary.creatable }}</span> 个，
+                                可更新 <span class="font-bold text-emerald-700">{{ bomImportPreview.summary.updatable }}</span> 个，
+                                无效 <span class="font-bold text-red-600">{{ bomImportPreview.summary.invalid }}</span> 个，
+                                明细 <span class="font-bold text-indigo-700">{{ bomImportPreview.summary.itemCount }}</span> 行
+                            </p>
+                        </div>
+                        <div v-if="bomImportPreview.items && bomImportPreview.items.some(item => item.errors && item.errors.length > 0)" class="bg-red-50 border border-red-200 rounded-lg p-3 max-h-40 overflow-y-auto">
+                            <p class="text-xs font-medium text-red-700 mb-1">预览错误：</p>
+                            <div v-for="item in bomImportPreview.items.filter(item => item.errors && item.errors.length > 0).slice(0, 20)" :key="'bom-import-preview-' + item.key" class="text-xs text-red-600">
+                                {{ item.name || item.key }}：{{ item.errors.join('；') }}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div v-if="bomImportResult" class="mb-4">
+                        <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                            <p class="text-sm text-emerald-800">
+                                <span class="font-semibold">导入完成!</span>
+                                共 {{ bomImportResult.total }} 个 BOM，新增 <span class="font-bold text-emerald-700">{{ bomImportResult.imported }}</span> 个，
+                                更新 <span class="font-bold text-blue-700">{{ bomImportResult.updated }}</span> 个
+                            </p>
+                        </div>
+                    </div>
+
+                    <div v-if="bomImportError" class="bg-red-50 text-red-600 text-sm rounded-lg px-3 py-2 mb-4">{{ bomImportError }}</div>
+
+                    <div class="flex gap-3">
+                        <button @click="submitBomImport" :disabled="!bomImportFile || bomImportLoading"
+                                class="flex-1 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white text-sm py-2.5 rounded-lg transition">
+                            {{ bomImportLoading ? (bomImportPreviewToken ? '提交中...' : '校验中...') : (bomImportPreviewToken ? '确认提交' : '开始校验') }}
+                        </button>
+                        <button @click="closeBomImportModal" class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm py-2.5 rounded-lg transition">
+                            {{ bomImportResult ? '完成' : '取消' }}
+                        </button>
+                    </div>
+                </div>
+            </div>
         </div>
         `,
         setup() {
@@ -10823,6 +11098,14 @@
             const showVersionModal = ref(false);
             const versionList = ref([]);
             const versionBomId = ref(null);
+            const showBomImportModal = ref(false);
+            const bomImportFile = ref(null);
+            const bomImportLoading = ref(false);
+            const bomImportError = ref('');
+            const bomImportPreview = ref(null);
+            const bomImportPreviewToken = ref('');
+            const bomImportResult = ref(null);
+            const bomImportDragOver = ref(false);
             const showBomBulkPaste = ref(false);
             const bomBulkPasteText = ref('');
             const bomBulkPastePreview = ref({ failed: [] });
@@ -10844,6 +11127,60 @@
             const checkQty = ref(1);
             const checkLoading = ref(false);
             const checkResult = ref(null);
+
+            function handleBomImportFile(e) {
+                bomImportFile.value = e.target.files[0] || null;
+                bomImportError.value = '';
+                bomImportPreview.value = null;
+                bomImportPreviewToken.value = '';
+                bomImportResult.value = null;
+            }
+
+            function handleBomImportDrop(e) {
+                bomImportDragOver.value = false;
+                const file = e.dataTransfer.files[0];
+                if (file) {
+                    bomImportFile.value = file;
+                    bomImportError.value = '';
+                    bomImportPreview.value = null;
+                    bomImportPreviewToken.value = '';
+                    bomImportResult.value = null;
+                }
+            }
+
+            async function submitBomImport() {
+                if (!bomImportFile.value) return;
+                bomImportLoading.value = true;
+                bomImportError.value = '';
+                try {
+                    if (!bomImportPreviewToken.value) {
+                        const formData = new FormData();
+                        formData.append('file', bomImportFile.value);
+                        const resp = await fetch('/api/boms/import/preview', { method: 'POST', body: formData, credentials: 'same-origin' });
+                        const json = await resp.json();
+                        if (!json.success) throw new Error(json.error?.message || '预校验失败');
+                        bomImportPreview.value = json.data;
+                        bomImportPreviewToken.value = json.data.previewToken;
+                    } else {
+                        bomImportResult.value = await api.post('/api/boms/import/commit', { previewToken: bomImportPreviewToken.value });
+                        bomImportPreviewToken.value = '';
+                        await loadBOMs();
+                    }
+                } catch (e) {
+                    bomImportError.value = e.message;
+                } finally {
+                    bomImportLoading.value = false;
+                }
+            }
+
+            function closeBomImportModal() {
+                showBomImportModal.value = false;
+                bomImportFile.value = null;
+                bomImportError.value = '';
+                bomImportPreview.value = null;
+                bomImportPreviewToken.value = '';
+                bomImportResult.value = null;
+            }
 
             async function checkShortage() {
                 if (!detail.value.bom) return;
@@ -11192,10 +11529,11 @@
                 showForm, editId, formLoading, formError, form,
                 allMaterials, allBoms, availableSubBoms, bomOutputRecommendedMaterials, bomItemRecommendedMaterials, showBomBulkPaste, bomBulkPasteText, bomBulkPastePreview,
                 showVersionModal, versionList, canAction,
+                showBomImportModal, bomImportFile, bomImportLoading, bomImportError, bomImportPreview, bomImportPreviewToken, bomImportResult, bomImportDragOver,
                 statusLabel, statusCls, supplyRiskLevelLabel, supplyRiskLevelClass, bomShortageRowClass,
                 debounceLoad, loadBOMs, viewDetail, openCreate, openEdit,
                 addItem, toggleBomBulkPaste, clearBomBulkPaste, applyBomBulkPaste, onBomMaterialChange, submitForm, deleteBOM, duplicateBOM,
-                showVersions, restoreVersion
+                showVersions, restoreVersion, handleBomImportFile, handleBomImportDrop, submitBomImport, closeBomImportModal
             };
         }
     };

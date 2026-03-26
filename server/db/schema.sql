@@ -130,6 +130,34 @@ CREATE TABLE IF NOT EXISTS material_suppliers (
 
 CREATE INDEX IF NOT EXISTS idx_material_suppliers_material ON material_suppliers(material_id);
 
+CREATE TABLE IF NOT EXISTS material_supplier_prices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+    supplier_name TEXT NOT NULL,
+    supplier_code TEXT,
+    quoted_price REAL DEFAULT 0,
+    quoted_discount REAL DEFAULT 1,
+    effective_price REAL DEFAULT 0,
+    last_purchase_price REAL DEFAULT 0,
+    last_purchase_discount REAL DEFAULT 1,
+    last_purchase_effective_price REAL DEFAULT 0,
+    last_purchase_at TEXT,
+    unit TEXT,
+    spec TEXT,
+    model TEXT,
+    source_platform TEXT DEFAULT 'offline',
+    currency TEXT DEFAULT 'CNY',
+    is_default INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    notes TEXT,
+    raw_source TEXT,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_material_supplier_prices_material ON material_supplier_prices(material_id);
+CREATE INDEX IF NOT EXISTS idx_material_supplier_prices_supplier ON material_supplier_prices(supplier_name);
+
 -- ============================================
 -- 仓库
 -- ============================================

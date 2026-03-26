@@ -13,6 +13,8 @@
  */
 
 const express = require('express');
+const multer = require('multer');
+const ExcelJS = require('exceljs');
 const { getDB } = require('../db/database');
 const { requireAuth } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permission');
@@ -21,6 +23,11 @@ const { ValidationError, NotFoundError } = require('../utils/errors');
 const { generatePinyinFields } = require('../utils/pinyin');
 
 const router = express.Router();
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 8 * 1024 * 1024 }
+});
+const bomImportPreviewStore = new Map();
 router.use(requireAuth);
 
 function getSupplyModeMeta(mode) {
@@ -31,6 +38,86 @@ function getSupplyModeMeta(mode) {
         on_site_fabrication: { label: '当前工单现场加工', hint: '仓库发出原材，车间在当前工单现场裁剪、焊接或装配。' }
     };
     return map[mode] || map.direct_issue;
+}
+
+function buildPreviewToken(prefix = 'preview') {
+    return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function cleanupPreviewStore(store) {
+    const now = Date.now();
+    for (const [token, entry] of store.entries()) {
+        if (!entry || entry.expiresAt <= now) {
+            store.delete(token);
+        }
+    }
+}
+
+function detectWorksheetHeaderRow(sheet, requiredHeaders) {
+    for (let rowNumber = 1; rowNumber <= Math.min(sheet.rowCount, 20); rowNumber++) {
+        const values = sheet.getRow(rowNumber).values.slice(1).map(value => String(value || '').trim());
+        if (requiredHeaders.every(header => values.includes(header))) {
+            return rowNumber;
+        }
+    }
+    return null;
+}
+
+function parseBomWorkbookCategory(row) {
+    const parts = ['一级分类', '二级分类', '三级分类', '四级分类']
+        .map(key => String(row[key] || '').trim())
+        .filter(Boolean);
+    return parts.join('-') || null;
+}
+
+async function parseProductionTemplateWorkbook(file) {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(file.buffer);
+    const sheet = workbook.worksheets[0];
+    if (!sheet) throw new ValidationError('Excel 中没有可用工作表');
+
+    const headerRowNumber = detectWorksheetHeaderRow(sheet, ['模板编号', '生产模板名称', '成品编号', '商品编号', '配套数量']);
+    if (!headerRowNumber) {
+        throw new ValidationError('无法识别生产模板明细表头，请确认文件格式正确');
+    }
+
+    const headers = [];
+    sheet.getRow(headerRowNumber).eachCell((cell, colNumber) => {
+        headers[colNumber] = String(cell.value || '').trim();
+    });
+
+    const rows = [];
+    for (let rowNumber = headerRowNumber + 1; rowNumber <= sheet.rowCount; rowNumber++) {
+        const row = sheet.getRow(rowNumber);
+        const record = {};
+        let hasValue = false;
+        headers.forEach((header, colNumber) => {
+            if (!header) return;
+            let value = row.getCell(colNumber).value;
+            if (value && typeof value === 'object' && value.result !== undefined) value = value.result;
+            if (value && typeof value === 'object' && value.text) value = value.text;
+            record[header] = value ?? '';
+            if (value !== null && value !== undefined && String(value).trim() !== '') hasValue = true;
+        });
+        if (!hasValue) continue;
+        rows.push({
+            rowNumber,
+            templateCode: String(record['模板编号'] || '').trim(),
+            templateName: String(record['生产模板名称'] || '').trim() || String(record['模板编号'] || '').trim(),
+            outputCode: String(record['成品编号'] || '').trim(),
+            outputName: String(record['成品名称'] || '').trim(),
+            outputUnit: String(record['单位'] || '').trim() || null,
+            category: parseBomWorkbookCategory(record),
+            description: String(record['模板备注'] || '').trim() || null,
+            status: String(record['状态'] || '').trim() === '启用' ? 'active' : 'draft',
+            itemCode: String(record['商品编号'] || '').trim(),
+            itemName: String(record['商品名称'] || '').trim(),
+            quantity: Number(record['配套数量'] || 0),
+            unit: String(record['明细--单位'] || '').trim() || String(record['单位'] || '').trim() || '件'
+        });
+    }
+
+    return rows.filter(row => row.templateCode || row.templateName);
 }
 
 function getSupplyRiskLevel(score) {
@@ -420,6 +507,239 @@ router.get('/:id', requirePermission('boms', 'view'), (req, res) => {
             versionCount
         }
     });
+});
+
+router.post('/import/preview', requirePermission('boms', 'add'), upload.single('file'), async (req, res) => {
+    if (!req.file) throw new ValidationError('请选择生产模板明细文件');
+
+    cleanupPreviewStore(bomImportPreviewStore);
+    const db = getDB();
+    const rows = await parseProductionTemplateWorkbook(req.file);
+    if (!rows.length) throw new ValidationError('生产模板明细中没有可导入的 BOM 数据');
+
+    const materials = db.prepare('SELECT id, code, name FROM materials WHERE is_active = 1').all();
+    const materialsByCode = new Map(materials.filter(item => item.code).map(item => [item.code, item]));
+    const materialsByName = new Map(materials.filter(item => item.name).map(item => [item.name, item]));
+
+    const grouped = new Map();
+    rows.forEach(row => {
+        const key = row.templateCode || row.templateName;
+        if (!grouped.has(key)) {
+            grouped.set(key, {
+                templateCode: row.templateCode,
+                templateName: row.templateName,
+                outputCode: row.outputCode,
+                outputName: row.outputName,
+                outputUnit: row.outputUnit,
+                category: row.category,
+                description: row.description,
+                status: row.status,
+                rows: []
+            });
+        }
+        grouped.get(key).rows.push(row);
+    });
+
+    const items = [];
+    const summary = { total: grouped.size, creatable: 0, updatable: 0, invalid: 0, itemCount: rows.length };
+    for (const group of grouped.values()) {
+        const outputMaterial = (group.outputCode && materialsByCode.get(group.outputCode))
+            || (group.outputName && materialsByName.get(group.outputName))
+            || null;
+        const existingBom = db.prepare(`
+            SELECT id, name, code, version
+            FROM boms
+            WHERE is_active = 1 AND (name = ? OR name = ?)
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
+        `).get(group.templateName, group.templateCode || group.templateName);
+
+        const previewItem = {
+            key: group.templateCode || group.templateName,
+            action: existingBom ? 'update' : 'create',
+            name: group.templateName,
+            templateCode: group.templateCode,
+            outputCode: group.outputCode,
+            outputName: group.outputName,
+            outputMaterialId: outputMaterial?.id || null,
+            materialCount: group.rows.length,
+            category: group.category,
+            status: group.status,
+            rows: group.rows,
+            warnings: [],
+            errors: []
+        };
+
+        if (!group.templateName) previewItem.errors.push('生产模板名称不能为空');
+        if (!outputMaterial) previewItem.errors.push(`找不到产出物料：${group.outputCode || group.outputName || '未填写'}`);
+
+        previewItem.items = group.rows.map(detail => {
+            const material = (detail.itemCode && materialsByCode.get(detail.itemCode))
+                || (detail.itemName && materialsByName.get(detail.itemName))
+                || null;
+            const detailItem = {
+                row: detail.rowNumber,
+                itemCode: detail.itemCode,
+                itemName: detail.itemName,
+                quantity: detail.quantity,
+                materialId: material?.id || null,
+                errors: []
+            };
+            if (!material) detailItem.errors.push(`找不到明细物料：${detail.itemCode || detail.itemName || '未填写'}`);
+            if (!detail.quantity || Number.isNaN(detail.quantity) || detail.quantity <= 0) detailItem.errors.push('配套数量必须大于 0');
+            if (detailItem.errors.length > 0) {
+                previewItem.errors.push(`第 ${detail.rowNumber} 行：${detailItem.errors.join('，')}`);
+            }
+            return detailItem;
+        });
+
+        if (existingBom) {
+            previewItem.bomId = existingBom.id;
+            previewItem.version = existingBom.version;
+            summary.updatable++;
+        } else {
+            summary.creatable++;
+        }
+
+        if (previewItem.errors.length > 0) {
+            previewItem.action = 'invalid';
+            summary.invalid++;
+            if (existingBom) summary.updatable--;
+            else summary.creatable--;
+        }
+
+        items.push(previewItem);
+    }
+
+    const previewToken = buildPreviewToken('bom_import');
+    bomImportPreviewStore.set(previewToken, {
+        createdBy: req.session.user.id,
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 30 * 60 * 1000,
+        items,
+        summary
+    });
+
+    res.json({ success: true, data: { previewToken, summary, items } });
+});
+
+router.post('/import/commit', requirePermission('boms', 'add'), (req, res) => {
+    cleanupPreviewStore(bomImportPreviewStore);
+    const { previewToken } = req.body || {};
+    if (!previewToken) throw new ValidationError('缺少 previewToken');
+    const preview = bomImportPreviewStore.get(previewToken);
+    if (!preview || preview.createdBy !== req.session.user.id) {
+        throw new ValidationError('BOM 导入预览已失效，请重新上传文件');
+    }
+
+    const invalidItems = preview.items.filter(item => item.action === 'invalid');
+    if (invalidItems.length > 0) {
+        throw new ValidationError(`存在 ${invalidItems.length} 个无效 BOM，无法提交`);
+    }
+
+    const db = getDB();
+    const doCommit = db.transaction(() => {
+        let imported = 0;
+        let updated = 0;
+
+        preview.items.forEach(item => {
+            const name = item.name;
+            const { fullPinyin, abbr } = generatePinyinFields(name);
+
+            if (item.bomId) {
+                const bom = db.prepare('SELECT * FROM boms WHERE id = ?').get(item.bomId);
+                const currentItems = db.prepare('SELECT * FROM bom_items WHERE bom_id = ? ORDER BY sort_order').all(item.bomId);
+                const snapshot = JSON.stringify({
+                    name: bom.name,
+                    code: bom.code,
+                    version: bom.version,
+                    outputMaterialId: bom.output_material_id,
+                    outputQuantity: bom.output_quantity,
+                    category: bom.category,
+                    description: bom.description,
+                    items: currentItems
+                });
+                db.prepare(`
+                    INSERT INTO bom_versions (bom_id, version, snapshot, change_notes, created_by)
+                    VALUES (?, ?, ?, ?, ?)
+                `).run(item.bomId, bom.version, snapshot, '生产模板明细导入自动备份', req.session.user.id);
+
+                let newVersion = bom.version;
+                const parts = String(bom.version || '1.0').split('.');
+                if (parts.length >= 2) {
+                    parts[parts.length - 1] = String((parseInt(parts[parts.length - 1], 10) || 0) + 1);
+                    newVersion = parts.join('.');
+                } else {
+                    newVersion = `${bom.version || '1.0'}.1`;
+                }
+
+                db.prepare(`
+                    UPDATE boms
+                    SET name = ?, output_material_id = ?, output_quantity = 1, category = ?, description = ?, status = ?,
+                        version = ?, name_pinyin = ?, name_pinyin_abbr = ?, updated_at = datetime('now','localtime')
+                    WHERE id = ?
+                `).run(
+                    name,
+                    item.outputMaterialId,
+                    item.category || null,
+                    item.rows[0]?.description || null,
+                    item.status || 'active',
+                    newVersion,
+                    fullPinyin,
+                    abbr,
+                    item.bomId
+                );
+
+                db.prepare('DELETE FROM bom_items WHERE bom_id = ?').run(item.bomId);
+                item.items.forEach((detail, index) => {
+                    db.prepare(`
+                        INSERT INTO bom_items (bom_id, material_id, quantity, sort_order)
+                        VALUES (?, ?, ?, ?)
+                    `).run(item.bomId, detail.materialId, detail.quantity, index);
+                });
+                updated++;
+            } else {
+                const code = generateBomCode(db);
+                const result = db.prepare(`
+                    INSERT INTO boms (name, code, output_material_id, output_quantity, category, description, status, name_pinyin, name_pinyin_abbr, created_by)
+                    VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+                `).run(
+                    name,
+                    code,
+                    item.outputMaterialId,
+                    item.category || null,
+                    item.rows[0]?.description || null,
+                    item.status || 'active',
+                    fullPinyin,
+                    abbr,
+                    req.session.user.id
+                );
+                const bomId = Number(result.lastInsertRowid);
+                item.items.forEach((detail, index) => {
+                    db.prepare(`
+                        INSERT INTO bom_items (bom_id, material_id, quantity, sort_order)
+                        VALUES (?, ?, ?, ?)
+                    `).run(bomId, detail.materialId, detail.quantity, index);
+                });
+                imported++;
+            }
+        });
+
+        return { total: preview.items.length, imported, updated };
+    });
+
+    const result = doCommit();
+    bomImportPreviewStore.delete(previewToken);
+
+    logOperation({
+        userId: req.session.user.id,
+        action: 'import',
+        resource: 'boms',
+        detail: `导入生产模板明细：新增 ${result.imported}，更新 ${result.updated}，共 ${result.total} 个 BOM`,
+        ip: req.ip
+    });
+
+    res.json({ success: true, data: result });
 });
 
 /**

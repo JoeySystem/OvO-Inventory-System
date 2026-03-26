@@ -25,6 +25,8 @@ const upload = multer({
     limits: { fileSize: 5 * 1024 * 1024 }
 });
 const importPreviewStore = new Map();
+const inventoryWorkbookPreviewStore = new Map();
+const supplierPricePreviewStore = new Map();
 
 const MATERIAL_TYPES = ['raw', 'wip', 'finished', 'consumable', 'packaging', 'spare', 'virtual'];
 const LIFECYCLE_STATUSES = ['draft', 'pending_review', 'active', 'frozen', 'inactive', 'obsolete'];
@@ -104,6 +106,157 @@ function getImportField(row, aliases) {
         return value;
     }
     return undefined;
+}
+
+function buildPreviewToken(prefix = 'preview') {
+    return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function cleanupPreviewStore(store) {
+    const now = Date.now();
+    for (const [token, entry] of store.entries()) {
+        if (!entry || entry.expiresAt <= now) {
+            store.delete(token);
+        }
+    }
+}
+
+function detectWorksheetHeaderRow(sheet, requiredHeaders) {
+    for (let rowNumber = 1; rowNumber <= Math.min(sheet.rowCount, 20); rowNumber++) {
+        const values = sheet.getRow(rowNumber).values
+            .slice(1)
+            .map(value => String(value || '').trim());
+        if (requiredHeaders.every(header => values.includes(header))) {
+            return rowNumber;
+        }
+    }
+    return null;
+}
+
+function mapInventoryWorkbookCategory(row) {
+    const parts = ['一级分类', '二级分类', '三级分类', '四级分类']
+        .map(key => trimText(row[key]))
+        .filter(Boolean);
+    return parts.join('-') || null;
+}
+
+async function parseInventoryWorkbook(file) {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(file.buffer);
+    const sheet = workbook.worksheets[0];
+    if (!sheet) throw new ValidationError('Excel 中没有可用工作表');
+
+    const headerRowNumber = detectWorksheetHeaderRow(sheet, ['商品名称', '商品编号', '账面库存']);
+    if (!headerRowNumber) {
+        throw new ValidationError('无法识别库存状况表表头，请确认文件格式正确');
+    }
+
+    const headers = [];
+    sheet.getRow(headerRowNumber).eachCell((cell, colNumber) => {
+        headers[colNumber] = String(cell.value || '').trim();
+    });
+
+    const rows = [];
+    for (let rowNumber = headerRowNumber + 1; rowNumber <= sheet.rowCount; rowNumber++) {
+        const row = sheet.getRow(rowNumber);
+        const record = {};
+        let hasValue = false;
+        headers.forEach((header, colNumber) => {
+            if (!header) return;
+            let value = row.getCell(colNumber).value;
+            if (value && typeof value === 'object' && value.result !== undefined) value = value.result;
+            if (value && typeof value === 'object' && value.text) value = value.text;
+            record[header] = value ?? '';
+            if (value !== null && value !== undefined && String(value).trim() !== '') hasValue = true;
+        });
+        if (!hasValue) continue;
+        rows.push({
+            rowNumber,
+            code: trimText(record['商品编号']),
+            name: trimText(record['商品名称']),
+            spec: trimText(record['规格']),
+            brand: trimText(record['品牌']),
+            unit: trimText(record['基本单位']) || trimText(record['明细--单位']) || '件',
+            categoryName: mapInventoryWorkbookCategory(record),
+            costPrice: parseNumberField(record['成本均价'] ?? record['参考成本价'] ?? record['库存金额'], '成本均价'),
+            salePrice: parseNumberField(record['零售价'] ?? record['预设售价1'], '零售价'),
+            inventoryQty: parseNumberField(record['账面库存'] ?? record['仓内库存'], '账面库存'),
+            raw: record
+        });
+    }
+
+    return rows.filter(item => item.code || item.name);
+}
+
+function mapSupplierPricePlatform(value) {
+    const text = trimText(value);
+    if (!text) return 'offline';
+    if (text.includes('淘宝')) return 'taobao';
+    if (text.includes('1688')) return '1688';
+    if (text.includes('京东')) return 'jd';
+    if (text.includes('拼多多')) return 'pdd';
+    if (text.includes('微信')) return 'wechat';
+    if (text.includes('厂家') || text.includes('原厂')) return 'factory_direct';
+    return 'offline';
+}
+
+async function parseSupplierPriceWorkbook(file) {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(file.buffer);
+    const sheet = workbook.worksheets[0];
+    if (!sheet) throw new ValidationError('Excel 中没有可用工作表');
+
+    const headerRowNumber = detectWorksheetHeaderRow(sheet, ['往来单位名称', '商品编号', '商品名称', '最近采购折前价格']);
+    if (!headerRowNumber) {
+        throw new ValidationError('无法识别供应商价格本表头，请确认文件格式正确');
+    }
+
+    const headers = [];
+    sheet.getRow(headerRowNumber).eachCell((cell, colNumber) => {
+        headers[colNumber] = String(cell.value || '').trim();
+    });
+
+    const rows = [];
+    for (let rowNumber = headerRowNumber + 1; rowNumber <= sheet.rowCount; rowNumber++) {
+        const row = sheet.getRow(rowNumber);
+        const record = {};
+        let hasValue = false;
+        headers.forEach((header, colNumber) => {
+            if (!header) return;
+            let value = row.getCell(colNumber).value;
+            if (value && typeof value === 'object' && value.result !== undefined) value = value.result;
+            if (value && typeof value === 'object' && value.text) value = value.text;
+            record[header] = value ?? '';
+            if (value !== null && value !== undefined && String(value).trim() !== '') hasValue = true;
+        });
+        if (!hasValue) continue;
+
+        const quotedPrice = parseNumberField(record['指定折前单价'], '指定折前单价');
+        const quotedDiscount = parseNumberField(record['指定折扣(0.9为9折)'], '指定折扣');
+        const lastPurchasePrice = parseNumberField(record['最近采购折前价格'], '最近采购折前价格');
+        const lastPurchaseDiscount = parseNumberField(record['最近采购折扣'], '最近采购折扣');
+        rows.push({
+            rowNumber,
+            supplierCode: trimText(record['往来单位编号']),
+            supplierName: trimText(record['往来单位名称']),
+            materialCode: trimText(record['商品编号']),
+            materialName: trimText(record['商品名称']),
+            unit: trimText(record['单位']),
+            spec: trimText(record['规格']),
+            model: trimText(record['型号']),
+            quotedPrice,
+            quotedDiscount: quotedDiscount == null ? 1 : quotedDiscount,
+            effectivePrice: quotedPrice == null ? null : Number((quotedPrice * (quotedDiscount == null ? 1 : quotedDiscount)).toFixed(4)),
+            lastPurchasePrice,
+            lastPurchaseDiscount: lastPurchaseDiscount == null ? 1 : lastPurchaseDiscount,
+            lastPurchaseEffectivePrice: lastPurchasePrice == null ? null : Number((lastPurchasePrice * (lastPurchaseDiscount == null ? 1 : lastPurchaseDiscount)).toFixed(4)),
+            lastPurchaseAt: trimText(record['最近采购时间']),
+            sourcePlatform: mapSupplierPricePlatform(record['往来单位名称']),
+            raw: record
+        });
+    }
+
+    return rows.filter(item => item.supplierName && (item.materialCode || item.materialName));
 }
 
 function getDefaultMaterialType(categoryId, fallback = 'raw') {
@@ -659,6 +812,27 @@ async function parseImportFile(file) {
     throw new ValidationError('仅支持 .csv / .xlsx / .json 文件');
 }
 
+function looksLikeInventoryWorkbookFile(file, records = []) {
+    const fileName = String(file?.originalname || '').toLowerCase();
+    if (fileName.includes('库存状况表') || fileName.includes('商品库存')) {
+        return true;
+    }
+    const firstRow = records.find(item => item && typeof item === 'object') || {};
+    const keys = Object.keys(firstRow);
+    return ['商品名称', '商品编号', '账面库存'].every(key => keys.includes(key));
+}
+
+async function detectInventoryWorkbookUpload(file) {
+    const ext = (file?.originalname?.split('.').pop() || '').toLowerCase();
+    if (looksLikeInventoryWorkbookFile(file)) return true;
+    if (ext !== 'xlsx' || !file?.buffer) return false;
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(file.buffer);
+    const sheet = workbook.worksheets[0];
+    if (!sheet) return false;
+    return detectWorksheetHeaderRow(sheet, ['商品名称', '商品编号', '账面库存']) > 0;
+}
+
 function normalizeImportRecord(row) {
     const name = trimText(getImportField(row, ['name', '名称', '名称（必填）']));
     const code = trimText(getImportField(row, ['code', '编码', '编码（留空自动生成）']));
@@ -1020,83 +1194,91 @@ router.get('/search-options', (req, res) => {
     res.json({ success: true, data: { items } });
 });
 
-router.post('/import/preview', requirePermission('materials', 'add'), upload.single('file'), async (req, res) => {
-    if (!req.file) throw new ValidationError('请选择导入文件');
-    cleanupExpiredPreviews();
+router.post('/import/preview', requirePermission('materials', 'add'), upload.single('file'), async (req, res, next) => {
+    try {
+        if (!req.file) throw new ValidationError('请选择导入文件');
+        cleanupExpiredPreviews();
 
-    const db = getDB();
-    const records = await parseImportFile(req.file);
-    if (!records.length) throw new ValidationError('文件中没有有效数据');
-    if (records.length > 500) throw new ValidationError('单次导入最多支持500条');
-
-    const categoryMap = {};
-    db.prepare('SELECT id, name FROM categories').all().forEach(item => {
-        categoryMap[item.name] = item.id;
-    });
-
-    const items = [];
-    const summary = { total: records.length, creatable: 0, updatable: 0, duplicated: 0, invalid: 0 };
-    const seenCodes = new Set();
-
-    records.forEach((row, index) => {
-        const normalized = normalizeImportRecord(row);
-        const existing = normalized.code
-            ? db.prepare('SELECT id, code, name FROM materials WHERE code = ?').get(normalized.code)
-            : null;
-        const previewItem = {
-            row: index + 2,
-            action: existing ? 'update' : 'create',
-            code: normalized.code,
-            name: normalized.name,
-            normalized,
-            warnings: [],
-            errors: []
-        };
-
-        if (!existing && !normalized.name) previewItem.errors.push('名称不能为空');
-        if (!existing && !normalized.unit) previewItem.errors.push('单位不能为空');
-        if (normalized.materialType && !MATERIAL_TYPES.includes(normalized.materialType)) previewItem.errors.push('物料类型无效');
-        if (normalized.lifecycleStatus && !LIFECYCLE_STATUSES.includes(normalized.lifecycleStatus)) previewItem.errors.push('生命周期无效');
-        if (normalized.code && seenCodes.has(normalized.code)) previewItem.errors.push(`文件内编码重复: ${normalized.code}`);
-        if (normalized.code) seenCodes.add(normalized.code);
-
-        if (normalized.categoryName && !categoryMap[normalized.categoryName]) {
-            previewItem.warnings.push(`分类 "${normalized.categoryName}" 不存在，提交时将自动创建`);
+        const db = getDB();
+        const isInventoryWorkbook = await detectInventoryWorkbookUpload(req.file);
+        const records = await parseImportFile(req.file);
+        if (!records.length) throw new ValidationError('文件中没有有效数据');
+        if (isInventoryWorkbook || looksLikeInventoryWorkbookFile(req.file, records)) {
+            throw new ValidationError('当前文件属于“库存状况表”导入场景，请切换到“库存状况表”标签后再校验。');
         }
+        if (records.length > 500) throw new ValidationError('单次导入最多支持500条');
 
-        if (previewItem.errors.length > 0) {
-            previewItem.action = 'invalid';
-            summary.invalid++;
+        const categoryMap = {};
+        db.prepare('SELECT id, name FROM categories').all().forEach(item => {
+            categoryMap[item.name] = item.id;
+        });
+
+        const items = [];
+        const summary = { total: records.length, creatable: 0, updatable: 0, duplicated: 0, invalid: 0 };
+        const seenCodes = new Set();
+
+        records.forEach((row, index) => {
+            const normalized = normalizeImportRecord(row);
+            const existing = normalized.code
+                ? db.prepare('SELECT id, code, name FROM materials WHERE code = ?').get(normalized.code)
+                : null;
+            const previewItem = {
+                row: index + 2,
+                action: existing ? 'update' : 'create',
+                code: normalized.code,
+                name: normalized.name,
+                normalized,
+                warnings: [],
+                errors: []
+            };
+
+            if (!existing && !normalized.name) previewItem.errors.push('名称不能为空');
+            if (!existing && !normalized.unit) previewItem.errors.push('单位不能为空');
+            if (normalized.materialType && !MATERIAL_TYPES.includes(normalized.materialType)) previewItem.errors.push('物料类型无效');
+            if (normalized.lifecycleStatus && !LIFECYCLE_STATUSES.includes(normalized.lifecycleStatus)) previewItem.errors.push('生命周期无效');
+            if (normalized.code && seenCodes.has(normalized.code)) previewItem.errors.push(`文件内编码重复: ${normalized.code}`);
+            if (normalized.code) seenCodes.add(normalized.code);
+
+            if (normalized.categoryName && !categoryMap[normalized.categoryName]) {
+                previewItem.warnings.push(`分类 "${normalized.categoryName}" 不存在，提交时将自动创建`);
+            }
+
+            if (previewItem.errors.length > 0) {
+                previewItem.action = 'invalid';
+                summary.invalid++;
+                items.push(previewItem);
+                return;
+            }
+
+            if (existing) {
+                previewItem.materialId = existing.id;
+                summary.updatable++;
+            } else if (normalized.code) {
+                summary.creatable++;
+            } else {
+                previewItem.action = 'create';
+                previewItem.warnings.push('编码为空，提交时将自动生成');
+                summary.creatable++;
+            }
+
             items.push(previewItem);
-            return;
-        }
+        });
 
-        if (existing) {
-            previewItem.materialId = existing.id;
-            summary.updatable++;
-        } else if (normalized.code) {
-            summary.creatable++;
-        } else {
-            previewItem.action = 'create';
-            previewItem.warnings.push('编码为空，提交时将自动生成');
-            summary.creatable++;
-        }
+        summary.duplicated = items.filter(item => item.errors.some(msg => msg.includes('重复'))).length;
 
-        items.push(previewItem);
-    });
+        const previewToken = buildImportPreviewToken();
+        importPreviewStore.set(previewToken, {
+            createdBy: req.session.user.id,
+            createdAt: Date.now(),
+            expiresAt: Date.now() + 30 * 60 * 1000,
+            items,
+            summary
+        });
 
-    summary.duplicated = items.filter(item => item.errors.some(msg => msg.includes('重复'))).length;
-
-    const previewToken = buildImportPreviewToken();
-    importPreviewStore.set(previewToken, {
-        createdBy: req.session.user.id,
-        createdAt: Date.now(),
-        expiresAt: Date.now() + 30 * 60 * 1000,
-        items,
-        summary
-    });
-
-    res.json({ success: true, data: { previewToken, summary, items } });
+        res.json({ success: true, data: { previewToken, summary, items } });
+    } catch (error) {
+        next(error);
+    }
 });
 
 router.post('/import/commit', requirePermission('materials', 'add'), (req, res) => {
@@ -1260,6 +1442,412 @@ router.post('/import/commit', requirePermission('materials', 'add'), (req, res) 
         action: 'import',
         resource: 'materials',
         detail: `物料导入提交：新增 ${result.imported}，更新 ${result.updated}，共 ${result.total} 条`,
+        ip: req.ip
+    });
+
+    res.json({ success: true, data: result });
+});
+
+router.post('/import/inventory-workbook/preview', requirePermission('materials', 'add'), upload.single('file'), async (req, res) => {
+    if (!req.file) throw new ValidationError('请选择库存状况表文件');
+
+    cleanupPreviewStore(inventoryWorkbookPreviewStore);
+    const db = getDB();
+    const rows = await parseInventoryWorkbook(req.file);
+    if (!rows.length) throw new ValidationError('库存状况表中没有可导入的物料数据');
+
+    const activeWarehouse = db.prepare('SELECT id, name FROM warehouses WHERE is_active = 1 ORDER BY id ASC LIMIT 1').get();
+    if (!activeWarehouse) throw new ValidationError('系统中没有可用仓库，请先创建仓库');
+
+    const categoryCache = new Map(db.prepare('SELECT id, name FROM categories').all().map(item => [item.name, item.id]));
+    const existingByCode = new Map(db.prepare('SELECT id, code, name FROM materials WHERE code IS NOT NULL').all().map(item => [item.code, item]));
+
+    const items = [];
+    const summary = { total: rows.length, creatable: 0, updatable: 0, invalid: 0, stockSyncable: 0 };
+
+    rows.forEach(row => {
+        const existing = row.code ? existingByCode.get(row.code) : null;
+        const item = {
+            row: row.rowNumber,
+            action: existing ? 'update' : 'create',
+            code: row.code,
+            name: row.name,
+            normalized: row,
+            warehouseId: activeWarehouse.id,
+            warehouseName: activeWarehouse.name,
+            warnings: [],
+            errors: []
+        };
+
+        if (!row.name) item.errors.push('商品名称不能为空');
+        if (!row.code) item.errors.push('商品编号不能为空');
+        if (!row.unit) item.errors.push('基本单位不能为空');
+        if (row.inventoryQty === null || row.inventoryQty === undefined) item.errors.push('账面库存不能为空');
+        if (row.categoryName && !categoryCache.has(row.categoryName)) {
+            item.warnings.push(`分类 "${row.categoryName}" 不存在，提交时将自动创建`);
+        }
+
+        if (item.errors.length) {
+            item.action = 'invalid';
+            summary.invalid++;
+        } else if (existing) {
+            item.materialId = existing.id;
+            summary.updatable++;
+            summary.stockSyncable++;
+        } else {
+            summary.creatable++;
+            summary.stockSyncable++;
+        }
+
+        items.push(item);
+    });
+
+    const previewToken = buildPreviewToken('inventory_workbook');
+    inventoryWorkbookPreviewStore.set(previewToken, {
+        createdBy: req.session.user.id,
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 30 * 60 * 1000,
+        items,
+        summary
+    });
+
+    res.json({
+        success: true,
+        data: {
+            previewToken,
+            warehouse: activeWarehouse,
+            summary,
+            items
+        }
+    });
+});
+
+router.post('/import/inventory-workbook/commit', requirePermission('materials', 'add'), (req, res) => {
+    cleanupPreviewStore(inventoryWorkbookPreviewStore);
+    const { previewToken, warehouseId } = req.body || {};
+    if (!previewToken) throw new ValidationError('缺少 previewToken');
+    const preview = inventoryWorkbookPreviewStore.get(previewToken);
+    if (!preview || preview.createdBy !== req.session.user.id) {
+        throw new ValidationError('库存状况表导入预览已失效，请重新上传文件');
+    }
+
+    const invalidItems = preview.items.filter(item => item.action === 'invalid');
+    if (invalidItems.length > 0) {
+        throw new ValidationError(`存在 ${invalidItems.length} 条无效数据，无法提交`);
+    }
+
+    const db = getDB();
+    const finalWarehouseId = Number(warehouseId || preview.items[0]?.warehouseId || 0);
+    const warehouse = db.prepare('SELECT id, name FROM warehouses WHERE id = ? AND is_active = 1').get(finalWarehouseId);
+    if (!warehouse) throw new ValidationError('指定仓库不存在或已停用');
+
+    const categoryCache = new Map(db.prepare('SELECT id, name FROM categories').all().map(item => [item.name, item.id]));
+    const doCommit = db.transaction(() => {
+        let imported = 0;
+        let updated = 0;
+        let stockUpdated = 0;
+
+        preview.items.forEach(item => {
+            const row = item.normalized;
+            let categoryId = null;
+            if (row.categoryName) {
+                if (categoryCache.has(row.categoryName)) {
+                    categoryId = categoryCache.get(row.categoryName);
+                } else {
+                    const { fullPinyin, abbr } = generatePinyinFields(row.categoryName);
+                    const result = db.prepare(`
+                        INSERT INTO categories (name, name_pinyin, name_pinyin_abbr)
+                        VALUES (?, ?, ?)
+                    `).run(row.categoryName, fullPinyin, abbr);
+                    categoryId = Number(result.lastInsertRowid);
+                    categoryCache.set(row.categoryName, categoryId);
+                }
+            }
+
+            let materialId = item.materialId;
+            if (materialId) {
+                db.prepare(`
+                    UPDATE materials
+                    SET name = ?, category_id = ?, spec = ?, unit = ?, brand = ?, cost_price = ?, sale_price = ?, avg_cost = ?, standard_cost = ?,
+                        updated_at = datetime('now','localtime')
+                    WHERE id = ?
+                `).run(
+                    row.name,
+                    categoryId,
+                    row.spec || null,
+                    row.unit,
+                    row.brand || null,
+                    Number(row.costPrice || 0),
+                    Number(row.salePrice || 0),
+                    Number(row.costPrice || 0),
+                    Number(row.costPrice || 0),
+                    materialId
+                );
+                updated++;
+            } else {
+                const { fullPinyin, abbr } = generatePinyinFields(row.name);
+                const result = db.prepare(`
+                    INSERT INTO materials (
+                        code, internal_code, name, name_pinyin, name_pinyin_abbr, category_id, unit, spec, brand,
+                        cost_price, sale_price, avg_cost, standard_cost, material_type, lifecycle_status, is_active
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'raw', 'active', 1)
+                `).run(
+                    row.code,
+                    row.code,
+                    row.name,
+                    fullPinyin,
+                    abbr,
+                    categoryId,
+                    row.unit,
+                    row.spec || null,
+                    row.brand || null,
+                    Number(row.costPrice || 0),
+                    Number(row.salePrice || 0),
+                    Number(row.costPrice || 0),
+                    Number(row.costPrice || 0)
+                );
+                materialId = Number(result.lastInsertRowid);
+                imported++;
+            }
+
+            const inventoryRow = db.prepare(`
+                SELECT id FROM inventory WHERE material_id = ? AND warehouse_id = ?
+            `).get(materialId, warehouse.id);
+            if (inventoryRow) {
+                db.prepare(`
+                    UPDATE inventory
+                    SET quantity = ?, updated_at = datetime('now','localtime')
+                    WHERE id = ?
+                `).run(Number(row.inventoryQty || 0), inventoryRow.id);
+            } else {
+                db.prepare(`
+                    INSERT INTO inventory (material_id, warehouse_id, quantity, updated_at)
+                    VALUES (?, ?, ?, datetime('now','localtime'))
+                `).run(materialId, warehouse.id, Number(row.inventoryQty || 0));
+            }
+            stockUpdated++;
+        });
+
+        return {
+            total: preview.items.length,
+            imported,
+            updated,
+            stockUpdated,
+            warehouseName: warehouse.name
+        };
+    });
+
+    const result = doCommit();
+    inventoryWorkbookPreviewStore.delete(previewToken);
+
+    logOperation({
+        userId: req.session.user.id,
+        action: 'import',
+        resource: 'materials',
+        detail: `导入库存状况表：新增 ${result.imported}，更新 ${result.updated}，库存同步 ${result.stockUpdated}，仓库 ${result.warehouseName}`,
+        ip: req.ip
+    });
+
+    res.json({ success: true, data: result });
+});
+
+router.post('/import/supplier-price-workbook/preview', requirePermission('materials', 'add'), upload.single('file'), async (req, res) => {
+    if (!req.file) throw new ValidationError('请选择供应商价格本文件');
+
+    cleanupPreviewStore(supplierPricePreviewStore);
+    const db = getDB();
+    const rows = await parseSupplierPriceWorkbook(req.file);
+    if (!rows.length) throw new ValidationError('供应商价格本中没有可导入的数据');
+
+    const materialsByCode = new Map(db.prepare('SELECT id, code, name, spec, model FROM materials WHERE is_active = 1 AND code IS NOT NULL').all().map(item => [item.code, item]));
+    const materialsByName = db.prepare('SELECT id, code, name, spec, model FROM materials WHERE is_active = 1').all();
+    const items = [];
+    const summary = { total: rows.length, creatable: 0, updatable: 0, unmatched: 0, invalid: 0 };
+
+    rows.forEach(row => {
+        let material = row.materialCode ? materialsByCode.get(row.materialCode) : null;
+        if (!material && row.materialName) {
+            material = materialsByName.find(item => item.name === row.materialName && (!row.model || item.model === row.model)) ||
+                materialsByName.find(item => item.name === row.materialName && (!row.spec || item.spec === row.spec)) ||
+                materialsByName.find(item => item.name === row.materialName) ||
+                null;
+        }
+
+        const previewItem = {
+            row: row.rowNumber,
+            action: 'create',
+            supplierName: row.supplierName,
+            materialCode: row.materialCode,
+            materialName: row.materialName,
+            normalized: row,
+            warnings: [],
+            errors: []
+        };
+
+        if (!row.supplierName) previewItem.errors.push('往来单位名称不能为空');
+        if (!row.materialCode && !row.materialName) previewItem.errors.push('商品编号或商品名称至少填写一个');
+        if (!material) {
+            previewItem.errors.push('未匹配到系统物料');
+            previewItem.action = 'unmatched';
+            summary.unmatched++;
+        } else {
+            previewItem.materialId = material.id;
+            previewItem.materialCode = material.code;
+            previewItem.materialName = material.name;
+            const existing = db.prepare(`
+                SELECT id
+                FROM material_supplier_prices
+                WHERE material_id = ?
+                  AND supplier_name = ?
+                  AND COALESCE(supplier_code, '') = COALESCE(?, '')
+                ORDER BY id DESC
+                LIMIT 1
+            `).get(material.id, row.supplierName, row.supplierCode || '');
+            if (existing) {
+                previewItem.priceId = existing.id;
+                previewItem.action = 'update';
+                summary.updatable++;
+            } else {
+                summary.creatable++;
+            }
+        }
+
+        if (previewItem.errors.length && previewItem.action !== 'unmatched') {
+            previewItem.action = 'invalid';
+            summary.invalid++;
+        }
+
+        items.push(previewItem);
+    });
+
+    const previewToken = buildPreviewToken('supplier_price_workbook');
+    supplierPricePreviewStore.set(previewToken, {
+        createdBy: req.session.user.id,
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 30 * 60 * 1000,
+        items,
+        summary
+    });
+
+    res.json({ success: true, data: { previewToken, summary, items } });
+});
+
+router.post('/import/supplier-price-workbook/commit', requirePermission('materials', 'add'), (req, res) => {
+    cleanupPreviewStore(supplierPricePreviewStore);
+    const { previewToken } = req.body || {};
+    if (!previewToken) throw new ValidationError('缺少 previewToken');
+    const preview = supplierPricePreviewStore.get(previewToken);
+    if (!preview || preview.createdBy !== req.session.user.id) {
+        throw new ValidationError('供应商价格本导入预览已失效，请重新上传文件');
+    }
+
+    const invalidItems = preview.items.filter(item => item.action === 'invalid' || item.action === 'unmatched');
+    if (invalidItems.length > 0) {
+        throw new ValidationError(`存在 ${invalidItems.length} 条未匹配或无效数据，无法提交`);
+    }
+
+    const db = getDB();
+    const doCommit = db.transaction(() => {
+        let imported = 0;
+        let updated = 0;
+        let supplierLinksCreated = 0;
+
+        preview.items.forEach(item => {
+            const row = item.normalized;
+            const materialId = Number(item.materialId);
+            const quotedDiscount = row.quotedDiscount == null ? 1 : Number(row.quotedDiscount);
+            const lastPurchaseDiscount = row.lastPurchaseDiscount == null ? 1 : Number(row.lastPurchaseDiscount);
+            const effectivePrice = row.quotedPrice == null ? null : Number((Number(row.quotedPrice) * quotedDiscount).toFixed(4));
+            const lastPurchaseEffectivePrice = row.lastPurchasePrice == null ? null : Number((Number(row.lastPurchasePrice) * lastPurchaseDiscount).toFixed(4));
+
+            if (item.priceId) {
+                db.prepare(`
+                    UPDATE material_supplier_prices
+                    SET supplier_code = ?, quoted_price = ?, quoted_discount = ?, effective_price = ?,
+                        last_purchase_price = ?, last_purchase_discount = ?, last_purchase_effective_price = ?, last_purchase_at = ?,
+                        unit = ?, spec = ?, model = ?, source_platform = ?, raw_source = ?, updated_at = datetime('now','localtime')
+                    WHERE id = ?
+                `).run(
+                    row.supplierCode || null,
+                    row.quotedPrice ?? null,
+                    quotedDiscount,
+                    effectivePrice,
+                    row.lastPurchasePrice ?? null,
+                    lastPurchaseDiscount,
+                    lastPurchaseEffectivePrice,
+                    row.lastPurchaseAt || null,
+                    row.unit || null,
+                    row.spec || null,
+                    row.model || null,
+                    row.sourcePlatform || 'offline',
+                    JSON.stringify(row.raw || {}),
+                    item.priceId
+                );
+                updated++;
+            } else {
+                db.prepare(`
+                    INSERT INTO material_supplier_prices (
+                        material_id, supplier_name, supplier_code, quoted_price, quoted_discount, effective_price,
+                        last_purchase_price, last_purchase_discount, last_purchase_effective_price, last_purchase_at,
+                        unit, spec, model, source_platform, raw_source
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(
+                    materialId,
+                    row.supplierName,
+                    row.supplierCode || null,
+                    row.quotedPrice ?? null,
+                    quotedDiscount,
+                    effectivePrice,
+                    row.lastPurchasePrice ?? null,
+                    lastPurchaseDiscount,
+                    lastPurchaseEffectivePrice,
+                    row.lastPurchaseAt || null,
+                    row.unit || null,
+                    row.spec || null,
+                    row.model || null,
+                    row.sourcePlatform || 'offline',
+                    JSON.stringify(row.raw || {})
+                );
+                imported++;
+            }
+
+            const supplierLink = db.prepare(`
+                SELECT id FROM material_suppliers
+                WHERE material_id = ? AND supplier_name = ?
+                ORDER BY is_default DESC, id ASC
+                LIMIT 1
+            `).get(materialId, row.supplierName);
+            if (!supplierLink) {
+                db.prepare(`
+                    INSERT INTO material_suppliers (
+                        material_id, supplier_name, supplier_material_code, is_default, lead_time_days, min_order_qty, lot_size,
+                        last_purchase_price, supplier_type, source_platform, notes
+                    ) VALUES (?, ?, ?, 0, 0, 0, 0, ?, 'distributor', ?, ?)
+                `).run(materialId, row.supplierName, row.supplierCode || null, row.lastPurchasePrice ?? 0, row.sourcePlatform || 'offline', '由供应商价格本导入');
+                supplierLinksCreated++;
+            } else {
+                db.prepare(`
+                    UPDATE material_suppliers
+                    SET supplier_material_code = COALESCE(?, supplier_material_code),
+                        last_purchase_price = COALESCE(?, last_purchase_price),
+                        source_platform = COALESCE(?, source_platform),
+                        updated_at = datetime('now','localtime')
+                    WHERE id = ?
+                `).run(row.supplierCode || null, row.lastPurchasePrice ?? null, row.sourcePlatform || null, supplierLink.id);
+            }
+        });
+
+        return { total: preview.items.length, imported, updated, supplierLinksCreated };
+    });
+
+    const result = doCommit();
+    supplierPricePreviewStore.delete(previewToken);
+
+    logOperation({
+        userId: req.session.user.id,
+        action: 'import',
+        resource: 'materials',
+        detail: `导入供应商价格本：新增 ${result.imported}，更新 ${result.updated}，补充供应商关系 ${result.supplierLinksCreated}`,
         ip: req.ip
     });
 
@@ -1645,6 +2233,15 @@ router.get('/:id', requirePermission('materials', 'view'), (req, res) => {
         ORDER BY is_default DESC, id ASC
     `).all(req.params.id);
 
+    const supplierPrices = hasTable(db, 'material_supplier_prices')
+        ? db.prepare(`
+            SELECT *
+            FROM material_supplier_prices
+            WHERE material_id = ? AND COALESCE(is_active, 1) = 1
+            ORDER BY is_default DESC, COALESCE(last_purchase_at, '') DESC, id DESC
+        `).all(req.params.id)
+        : [];
+
     const substitutions = db.prepare(`
         SELECT ms.*, m.code as substitute_material_code, m.name as substitute_material_name
         FROM material_substitutions ms
@@ -1673,6 +2270,7 @@ router.get('/:id', requirePermission('materials', 'view'), (req, res) => {
             recentMovements,
             uoms,
             suppliers,
+            supplierPrices,
             lastPurchaseReference: getLastPurchaseReference(db, req.params.id),
             supplyRisk: getMaterialSupplyRisk(db, req.params.id),
             substitutions,

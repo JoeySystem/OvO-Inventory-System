@@ -24,13 +24,13 @@
   - 当前地址：
     - [https://github.com/JoeySystem/OvO-Inventory-System](https://github.com/JoeySystem/OvO-Inventory-System)
 - 本地目录名：`inventory-system-codex`
-  - 指当前开发机上的历史工作目录名
-  - 这是本地路径名，不要求和 GitHub 仓库名完全一致
+  - 指历史开发过程中常见的本地目录名
+  - 这是本地目录名示例，不要求和 GitHub 仓库名完全一致
 
 后续文档里如果同时出现这两个名字，应理解为：
 
 - `OvO-Inventory-System` = 仓库/发布名
-- `inventory-system-codex` = 当前本地项目目录名或历史内部代号
+- `inventory-system-codex` = 本地目录名示例或历史内部代号
 
 ## 项目定位
 
@@ -135,7 +135,7 @@ npm start
 
 参考模板见：
 
-- [.env.example](/Users/Joey/CodexProjects/inventory-system-codex/.env.example)
+- [.env.example](./.env.example)
 
 推荐配置：
 
@@ -163,12 +163,12 @@ npm start
 
 当前仓库已包含 Windows 部署与更新脚本：
 
-- [deploy/install.bat](/Users/Joey/CodexProjects/inventory-system-codex/deploy/install.bat)
-- [deploy/start.bat](/Users/Joey/CodexProjects/inventory-system-codex/deploy/start.bat)
-- [deploy/stop.bat](/Users/Joey/CodexProjects/inventory-system-codex/deploy/stop.bat)
-- [deploy/update.bat](/Users/Joey/CodexProjects/inventory-system-codex/deploy/update.bat)
-- [deploy/update-and-restart.bat](/Users/Joey/CodexProjects/inventory-system-codex/deploy/update-and-restart.bat)
-- [deploy/rollback.bat](/Users/Joey/CodexProjects/inventory-system-codex/deploy/rollback.bat)
+- [deploy/install.bat](./deploy/install.bat)
+- [deploy/start.bat](./deploy/start.bat)
+- [deploy/stop.bat](./deploy/stop.bat)
+- [deploy/update.bat](./deploy/update.bat)
+- [deploy/update-and-restart.bat](./deploy/update-and-restart.bat)
+- [deploy/rollback.bat](./deploy/rollback.bat)
 
 推荐原则：
 
@@ -179,16 +179,15 @@ npm start
 
 ## 环境兼容性
 
-当前推荐环境：
+当前支持环境：
 
-- Node.js `20.x LTS` 或 `22.x LTS`
+- Node.js `20.x / 22.x / 24.x`
 - npm `10.x` 或 `11.x`
-- 不建议直接使用 `Node 24.x`
 
-原因：
+推荐运行环境：
 
-- 项目依赖 `better-sqlite3`
-- 已有 Windows 实机反馈表明 `Node 24.x` 存在兼容风险
+- Windows 正式机优先 `20.x LTS` 或 `22.x LTS`
+- 开发机可使用 `24.x`
 
 可执行环境检查：
 
@@ -200,12 +199,12 @@ npm run check-env
 
 如果你是第一次接手项目，优先阅读以下文档：
 
-- [当前项目技术说明与维护交接指南.md](/Users/Joey/CodexProjects/inventory-system-codex/docs/当前项目技术说明与维护交接指南.md)
-- [项目实施路线图.md](/Users/Joey/CodexProjects/inventory-system-codex/docs/项目实施路线图.md)
-- [单据模型与库存流水映射设计.md](/Users/Joey/CodexProjects/inventory-system-codex/docs/单据模型与库存流水映射设计.md)
-- [物料主数据改造实施文档.md](/Users/Joey/CodexProjects/inventory-system-codex/docs/物料主数据改造实施文档.md)
-- [另一台电脑首次部署步骤.md](/Users/Joey/CodexProjects/inventory-system-codex/docs/另一台电脑首次部署步骤.md)
-- [Git标签发布与更新流程规范.md](/Users/Joey/CodexProjects/inventory-system-codex/docs/Git标签发布与更新流程规范.md)
+- [当前项目技术说明与维护交接指南.md](./docs/当前项目技术说明与维护交接指南.md)
+- [项目实施路线图.md](./docs/项目实施路线图.md)
+- [单据模型与库存流水映射设计.md](./docs/单据模型与库存流水映射设计.md)
+- [物料主数据改造实施文档.md](./docs/物料主数据改造实施文档.md)
+- [另一台电脑首次部署步骤.md](./docs/另一台电脑首次部署步骤.md)
+- [Git标签发布与更新流程规范.md](./docs/Git标签发布与更新流程规范.md)
 
 ## Git 使用建议
 
