@@ -15,6 +15,23 @@
 - Windows 部署源
 - 后续版本发布与更新来源
 
+## 命名约定
+
+为了避免后续交接时混淆，当前统一使用下面两种叫法：
+
+- 仓库名：`OvO-Inventory-System`
+  - 指 GitHub 仓库名
+  - 当前地址：
+    - [https://github.com/JoeySystem/OvO-Inventory-System](https://github.com/JoeySystem/OvO-Inventory-System)
+- 本地目录名：`inventory-system-codex`
+  - 指当前开发机上的历史工作目录名
+  - 这是本地路径名，不要求和 GitHub 仓库名完全一致
+
+后续文档里如果同时出现这两个名字，应理解为：
+
+- `OvO-Inventory-System` = 仓库/发布名
+- `inventory-system-codex` = 当前本地项目目录名或历史内部代号
+
 ## 项目定位
 
 当前系统主要用于内部生产管理场景，强调：
