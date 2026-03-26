@@ -83,21 +83,14 @@ app.use(helmet({
             scriptSrc: [
                 "'self'",
                 "'unsafe-inline'",
-                "'unsafe-eval'",
-                "https://unpkg.com",
-                "https://cdn.jsdelivr.net"
+                "'unsafe-eval'"
             ],
             styleSrc: [
                 "'self'",
-                "'unsafe-inline'",
-                "https://unpkg.com",
-                "https://cdn.jsdelivr.net",
-                "https://fonts.googleapis.com"
+                "'unsafe-inline'"
             ],
             fontSrc: [
-                "'self'",
-                "https://fonts.gstatic.com",
-                "https://cdn.jsdelivr.net"
+                "'self'"
             ],
             imgSrc: ["'self'", "data:", "blob:"],
             connectSrc: ["'self'"],
