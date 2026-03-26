@@ -15,11 +15,6 @@
 - Windows 部署源
 - 后续版本发布与更新来源
 
-## 命名约定
-
-- 仓库正式名称：`OvO-Inventory-System`
-- 若旧文档中出现 `inventory-system-codex`，将其视为历史内部代号或本地目录名示例即可
-
 ## 项目定位
 
 当前系统主要用于内部生产管理场景，强调：
@@ -67,13 +62,12 @@
 ## 目录结构
 
 ```text
-inventory-system-codex/
+OvO-Inventory-System/
 ├── public/          # 前端单页应用
 ├── server/          # 后端服务、路由、数据库初始化、业务服务
 ├── deploy/          # Windows 部署、更新、回滚脚本
 ├── docs/            # 项目方案、路线图、交接和实施文档
 ├── data/            # 本地数据库（不应提交真实业务库）
-├── dist/            # 打包产物
 ├── package.json
 └── .env.example
 ```
