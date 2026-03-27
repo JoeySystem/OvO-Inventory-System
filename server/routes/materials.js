@@ -84,6 +84,49 @@ function trimText(value) {
     return result || null;
 }
 
+function normalizeMaterialUnit(value, fallback = null) {
+    const raw = trimText(value);
+    if (!raw) return fallback;
+
+    const text = String(raw).trim();
+    const upper = text.toUpperCase();
+    const aliasMap = {
+        PCS: 'PCS',
+        PC: 'PCS',
+        PIECE: 'PCS',
+        PIECES: 'PCS',
+        个: 'PCS',
+        件: 'PCS',
+        EA: 'PCS',
+        SET: 'SET',
+        套: 'SET',
+        M: 'M',
+        米: 'M',
+        公尺: 'M',
+        CM: 'CM',
+        厘米: 'CM',
+        MM: 'MM',
+        毫米: 'MM',
+        KG: 'KG',
+        千克: 'KG',
+        公斤: 'KG',
+        G: 'G',
+        克: 'G',
+        L: 'L',
+        升: 'L',
+        ML: 'ML',
+        毫升: 'ML',
+        BOX: 'BOX',
+        箱: 'BOX',
+        ROLL: 'ROLL',
+        卷: 'ROLL',
+        PAIR: 'PAIR',
+        双: 'PAIR'
+    };
+
+    return aliasMap[upper] || aliasMap[text] || upper;
+}
+
 function hasTable(db, tableName) {
     const row = db.prepare(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?"
@@ -95,6 +138,58 @@ function buildSpecKey(name, spec, brand, unit) {
     return [name, spec, brand, unit]
         .map(item => (item || '').trim().toLowerCase())
         .join('|');
+}
+
+function evaluateMaterialNaming({ name, code, spec, brand, unit, materialType }) {
+    const materialName = trimText(name) || '';
+    const materialCode = trimText(code) || '';
+    const normalizedSpec = trimText(spec) || '';
+    const normalizedBrand = trimText(brand) || '';
+    const normalizedUnit = normalizeMaterialUnit(unit, null) || '';
+    const issues = [];
+    const addIssue = (codeValue, label, severity = 'warning') => issues.push({ code: codeValue, label, severity });
+
+    if (!materialName) {
+        addIssue('missing_name', '缺少物料名称', 'error');
+    }
+    if (!materialCode) {
+        addIssue('missing_code', '缺少物料编码', 'warning');
+    }
+    if (materialName && materialName.length < 2) {
+        addIssue('short_name', '名称过短，不利于识别', 'warning');
+    }
+    if (/[0-9]{4}[-./年]?[0-9]{1,2}[-./月]?[0-9]{1,2}/.test(materialName)) {
+        addIssue('date_in_name', '名称中包含日期，建议移入备注或版本信息', 'warning');
+    }
+    if (/(最新版|最终版|模板|测试|test|样品)/i.test(materialName)) {
+        addIssue('status_noise', '名称中包含状态/临时性描述，建议移入备注', 'warning');
+    }
+    if (/[【】]/.test(materialName)) {
+        addIssue('fancy_delimiter', '名称中使用了【】等装饰符号，建议改为普通结构化命名', 'warning');
+    }
+    if (/\s{2,}/.test(materialName)) {
+        addIssue('multi_space', '名称中存在多余空格', 'warning');
+    }
+    if (!normalizedUnit) {
+        addIssue('missing_unit', '缺少基础单位', 'error');
+    }
+    if (materialType === 'raw' && !normalizedSpec) {
+        addIssue('missing_spec', '原材料缺少规格型号，建议补充', 'warning');
+    }
+
+    const cleanedName = materialName
+        .replace(/[【】]/g, '')
+        .replace(/[0-9]{4}[-./年]?[0-9]{1,2}[-./月]?[0-9]{1,2}/g, '')
+        .replace(/(最新版|最终版|模板|测试|test|样品)/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const suggestionParts = [cleanedName || materialName, normalizedSpec, normalizedBrand, normalizedUnit].filter(Boolean);
+
+    return {
+        namingStatus: !issues.length ? 'compliant' : issues.some(item => item.severity === 'error') ? 'non_compliant' : 'warning',
+        namingIssues: issues,
+        suggestedName: suggestionParts.join(' / ')
+    };
 }
 
 function getImportField(row, aliases) {
@@ -176,7 +271,7 @@ async function parseInventoryWorkbook(file) {
             name: trimText(record['商品名称']),
             spec: trimText(record['规格']),
             brand: trimText(record['品牌']),
-            unit: trimText(record['基本单位']) || trimText(record['明细--单位']) || '件',
+            unit: normalizeMaterialUnit(trimText(record['基本单位']) || trimText(record['明细--单位']) || 'PCS', 'PCS'),
             categoryName: mapInventoryWorkbookCategory(record),
             costPrice: parseNumberField(record['成本均价'] ?? record['参考成本价'] ?? record['库存金额'], '成本均价'),
             salePrice: parseNumberField(record['零售价'] ?? record['预设售价1'], '零售价'),
@@ -241,7 +336,7 @@ async function parseSupplierPriceWorkbook(file) {
             supplierName: trimText(record['往来单位名称']),
             materialCode: trimText(record['商品编号']),
             materialName: trimText(record['商品名称']),
-            unit: trimText(record['单位']),
+            unit: normalizeMaterialUnit(record['单位']),
             spec: trimText(record['规格']),
             model: trimText(record['型号']),
             quotedPrice,
@@ -292,7 +387,7 @@ function normalizeMaterialPayload(body, currentMaterial = null) {
         throw new ValidationError('无效的供给方式', 'supplyMode');
     }
 
-    const unit = trimText(body.baseUnit ?? body.unit) || currentMaterial?.unit;
+    const unit = normalizeMaterialUnit(body.baseUnit ?? body.unit, currentMaterial?.unit);
     const name = trimText(body.name) || currentMaterial?.name;
     if (!name) throw new ValidationError('请输入物料名称', 'name');
     if (!unit) throw new ValidationError('请输入单位', 'unit');
@@ -836,7 +931,7 @@ async function detectInventoryWorkbookUpload(file) {
 function normalizeImportRecord(row) {
     const name = trimText(getImportField(row, ['name', '名称', '名称（必填）']));
     const code = trimText(getImportField(row, ['code', '编码', '编码（留空自动生成）']));
-    const unit = trimText(getImportField(row, ['unit', '单位', '单位（必填）']));
+    const unit = normalizeMaterialUnit(getImportField(row, ['unit', '单位', '单位（必填）']));
     const categoryName = trimText(getImportField(row, ['category', '分类', '分类名称']));
     const spec = trimText(getImportField(row, ['spec', '规格']));
     const brand = trimText(getImportField(row, ['brand', '品牌']));
@@ -1147,6 +1242,58 @@ router.get('/duplicates', requirePermission('materials', 'view'), (req, res) => 
     });
 });
 
+router.get('/naming-governance/summary', requirePermission('materials', 'view'), (req, res) => {
+    const db = getDB();
+    const { q = '', namingStatus = '', materialType = '' } = req.query;
+    const params = [];
+    const whereClauses = ['m.is_active = 1'];
+
+    if (materialType) {
+        whereClauses.push('m.material_type = ?');
+        params.push(materialType);
+    }
+    if (q) {
+        const search = buildSearchCondition(q, {
+            nameField: 'm.name',
+            pinyinField: 'm.name_pinyin',
+            abbrField: 'm.name_pinyin_abbr',
+            codeField: 'm.code'
+        });
+        whereClauses.push(`(${search.where} OR COALESCE(m.spec, '') LIKE ? OR COALESCE(m.brand, '') LIKE ?)`);
+        params.push(...search.params, `%${q}%`, `%${q}%`);
+    }
+
+    const items = db.prepare(`
+        SELECT m.id, m.code, m.name, m.spec, m.brand, m.unit, m.material_type, m.lifecycle_status, m.updated_at
+        FROM materials m
+        ${whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : ''}
+        ORDER BY m.updated_at DESC, m.id DESC
+    `).all(...params).map(item => {
+        const review = evaluateMaterialNaming(item);
+        return {
+            ...item,
+            naming_status: review.namingStatus,
+            naming_issues: review.namingIssues,
+            suggested_name: review.suggestedName
+        };
+    });
+
+    const filteredItems = namingStatus ? items.filter(item => item.naming_status === namingStatus) : items;
+
+    res.json({
+        success: true,
+        data: {
+            summary: {
+                total: filteredItems.length,
+                compliant: filteredItems.filter(item => item.naming_status === 'compliant').length,
+                warning: filteredItems.filter(item => item.naming_status === 'warning').length,
+                nonCompliant: filteredItems.filter(item => item.naming_status === 'non_compliant').length
+            },
+            items: filteredItems
+        }
+    });
+});
+
 router.get('/search-options', (req, res) => {
     const db = getDB();
     const q = trimText(req.query.q) || '';
@@ -1397,7 +1544,7 @@ router.post('/import/commit', requirePermission('materials', 'add'), (req, res) 
                 const materialCode = row.code || generateMaterialCode(db);
                 const materialType = row.materialType || 'raw';
                 const lifecycleStatus = row.lifecycleStatus || 'active';
-                const unit = row.unit || '个';
+                const unit = row.unit || 'PCS';
                 const name = row.name;
                 const { fullPinyin, abbr } = generatePinyinFields(row.name);
                 const result = db.prepare(`

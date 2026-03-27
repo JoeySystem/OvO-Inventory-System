@@ -172,7 +172,30 @@ const loginLimiter = rateLimit({
 // ============================================
 // 静态文件
 // ============================================
-app.use(express.static(path.join(__dirname, '../public')));
+app.use((req, res, next) => {
+    if (
+        req.path === '/' ||
+        req.path === '/index.html' ||
+        req.path.startsWith('/vendor/')
+    ) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+    }
+    next();
+});
+
+app.use(express.static(path.join(__dirname, '../public'), {
+    index: false,
+    setHeaders(res, filePath) {
+        const normalizedPath = filePath.replace(/\\/g, '/');
+        if (normalizedPath.endsWith('/index.html') || normalizedPath.includes('/public/vendor/')) {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+        }
+    }
+}));
 
 // ============================================
 // API 路由
@@ -228,6 +251,9 @@ app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api/')) {
         return next();
     }
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 

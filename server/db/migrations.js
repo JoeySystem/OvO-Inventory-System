@@ -658,6 +658,155 @@ function runProductionSubstitutionWorkflowMigration(db) {
     });
 }
 
+function runInventoryConsistencyGovernanceMigration(db) {
+    applyMigration(db, '020_inventory_consistency_governance', () => {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS inventory_consistency_governance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                issue_key TEXT NOT NULL UNIQUE,
+                issue_type TEXT NOT NULL,
+                material_id INTEGER REFERENCES materials(id) ON DELETE CASCADE,
+                warehouse_id INTEGER REFERENCES warehouses(id) ON DELETE CASCADE,
+                status TEXT NOT NULL DEFAULT 'open',
+                owner TEXT,
+                notes TEXT,
+                updated_by INTEGER REFERENCES users(id),
+                resolved_at TEXT,
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_inventory_consistency_governance_status
+                ON inventory_consistency_governance(status);
+            CREATE INDEX IF NOT EXISTS idx_inventory_consistency_governance_owner
+                ON inventory_consistency_governance(owner);
+        `);
+    });
+}
+
+function runSupplyRiskGovernanceMigration(db) {
+    applyMigration(db, '021_supply_risk_governance', () => {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS supply_risk_governance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                material_id INTEGER NOT NULL UNIQUE REFERENCES materials(id) ON DELETE CASCADE,
+                action_type TEXT NOT NULL DEFAULT 'procurement',
+                status TEXT NOT NULL DEFAULT 'open',
+                owner TEXT,
+                notes TEXT,
+                source_context TEXT,
+                updated_by INTEGER REFERENCES users(id),
+                resolved_at TEXT,
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_supply_risk_governance_status
+                ON supply_risk_governance(status);
+            CREATE INDEX IF NOT EXISTS idx_supply_risk_governance_owner
+                ON supply_risk_governance(owner);
+            CREATE INDEX IF NOT EXISTS idx_supply_risk_governance_action_type
+                ON supply_risk_governance(action_type);
+        `);
+    });
+}
+
+function inferBomLevelFromName(name = '') {
+    const value = String(name || '').trim();
+    const levels = ['整机', '模块', '板级', '配套件'];
+    return levels.find(level => value.startsWith(`${level}_`) || value.startsWith(level)) || null;
+}
+
+function normalizeBomDisplayVersion(value, fallback = 'V01') {
+    const raw = String(value || '').trim().toUpperCase();
+    if (!raw) return fallback;
+    const direct = raw.match(/^V(\d{2})$/);
+    if (direct) return `V${direct[1]}`;
+    const numeric = raw.match(/(\d{1,2})/);
+    if (numeric) return `V${String(Number(numeric[1] || 1)).padStart(2, '0')}`;
+    return fallback;
+}
+
+function evaluateBomNamingSnapshot(name, bomLevel, displayVersion) {
+    const issues = [];
+    const value = String(name || '');
+    if (!bomLevel) issues.push({ code: 'missing_level', label: '未设置 BOM 层级', severity: 'warning' });
+    if (bomLevel && !value.startsWith(`${bomLevel}_`)) issues.push({ code: 'prefix_mismatch', label: '名称未按层级前缀命名', severity: 'error' });
+    if (!new RegExp(`_${displayVersion}$`, 'i').test(value)) issues.push({ code: 'missing_version_suffix', label: '名称未以标准版本尾缀结尾', severity: 'warning' });
+    if (/20\d{2}[-/.年]?\d{1,2}[-/.月]?\d{1,2}日?/.test(value) || /20\d{6}/.test(value)) issues.push({ code: 'date_in_name', label: '名称中包含日期信息', severity: 'error' });
+    ['.BOM', 'BOM', '模板', '最新版', '最终版', '新版', '改版'].forEach(token => {
+        const matched = token === 'BOM' ? (/\bBOM\b/i.test(value) || /\.BOM/i.test(value)) : value.includes(token);
+        if (matched) issues.push({ code: `forbidden_${token}`, label: `名称中包含禁用词 ${token}`, severity: 'error' });
+    });
+    return {
+        issues,
+        status: !issues.length ? 'compliant' : issues.some(item => item.severity === 'error') ? 'non_compliant' : 'warning'
+    };
+}
+
+function runBomNamingGovernanceMigration(db) {
+    if (!hasTable(db, 'boms')) return;
+
+    applyMigration(db, '022_bom_naming_governance', () => {
+        addColumnIfMissing(db, 'boms', 'bom_level', 'TEXT');
+        addColumnIfMissing(db, 'boms', 'display_version', "TEXT DEFAULT 'V01'");
+        addColumnIfMissing(db, 'boms', 'naming_status', "TEXT DEFAULT 'warning'");
+        addColumnIfMissing(db, 'boms', 'naming_issues_json', 'TEXT');
+        addColumnIfMissing(db, 'boms', 'suggested_name', 'TEXT');
+        addColumnIfMissing(db, 'boms', 'naming_checked_at', 'TEXT');
+
+        const rows = db.prepare('SELECT id, name, version, bom_level, display_version FROM boms').all();
+        const stmt = db.prepare(`
+            UPDATE boms
+            SET bom_level = ?, display_version = ?, naming_status = ?, naming_issues_json = ?, suggested_name = ?, naming_checked_at = datetime('now','localtime')
+            WHERE id = ?
+        `);
+        rows.forEach(row => {
+            const bomLevel = row.bom_level || inferBomLevelFromName(row.name) || null;
+            const displayVersion = normalizeBomDisplayVersion(row.display_version || row.version || 'V01');
+            const evaluation = evaluateBomNamingSnapshot(row.name, bomLevel, displayVersion);
+            const sanitizedName = String(row.name || '')
+                .replace(/\s+/g, '_')
+                .replace(/_+/g, '_')
+                .replace(/^_+|_+$/g, '')
+                .replace(new RegExp(`_${displayVersion}$`, 'i'), '');
+            const suggestedName = [bomLevel || '模块', sanitizedName, displayVersion].filter(Boolean).join('_');
+            stmt.run(
+                bomLevel,
+                displayVersion,
+                evaluation.status,
+                JSON.stringify(evaluation.issues),
+                suggestedName,
+                row.id
+            );
+        });
+    });
+}
+
+function runProductionExceptionGovernanceMigration(db) {
+    if (!hasTable(db, 'production_exceptions')) return;
+
+    applyMigration(db, '023_production_exception_governance', () => {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS production_exception_governance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                exception_id INTEGER NOT NULL UNIQUE REFERENCES production_exceptions(id) ON DELETE CASCADE,
+                status TEXT NOT NULL DEFAULT 'open',
+                owner TEXT,
+                notes TEXT,
+                updated_by INTEGER REFERENCES users(id),
+                resolved_at TEXT,
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_production_exception_governance_status
+                ON production_exception_governance(status);
+            CREATE INDEX IF NOT EXISTS idx_production_exception_governance_owner
+                ON production_exception_governance(owner);
+        `);
+    });
+}
+
 function runMigrations(db) {
     ensureMigrationsTable(db);
     runLegacyMigrations(db);
@@ -680,6 +829,10 @@ function runMigrations(db) {
     runMaterialSupplierPricesMigration(db);
     runMaterialSupplierPricesAlignmentMigration(db);
     runProductionSubstitutionWorkflowMigration(db);
+    runInventoryConsistencyGovernanceMigration(db);
+    runSupplyRiskGovernanceMigration(db);
+    runBomNamingGovernanceMigration(db);
+    runProductionExceptionGovernanceMigration(db);
 }
 
 module.exports = { runMigrations };

@@ -158,6 +158,64 @@ CREATE TABLE IF NOT EXISTS material_supplier_prices (
 CREATE INDEX IF NOT EXISTS idx_material_supplier_prices_material ON material_supplier_prices(material_id);
 CREATE INDEX IF NOT EXISTS idx_material_supplier_prices_supplier ON material_supplier_prices(supplier_name);
 
+CREATE TABLE IF NOT EXISTS inventory_consistency_governance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_key TEXT NOT NULL UNIQUE,
+    issue_type TEXT NOT NULL,
+    material_id INTEGER REFERENCES materials(id) ON DELETE CASCADE,
+    warehouse_id INTEGER REFERENCES warehouses(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'open',
+    owner TEXT,
+    notes TEXT,
+    updated_by INTEGER REFERENCES users(id),
+    resolved_at TEXT,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_inventory_consistency_governance_status
+    ON inventory_consistency_governance(status);
+CREATE INDEX IF NOT EXISTS idx_inventory_consistency_governance_owner
+    ON inventory_consistency_governance(owner);
+
+CREATE TABLE IF NOT EXISTS supply_risk_governance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    material_id INTEGER NOT NULL UNIQUE REFERENCES materials(id) ON DELETE CASCADE,
+    action_type TEXT NOT NULL DEFAULT 'procurement',
+    status TEXT NOT NULL DEFAULT 'open',
+    owner TEXT,
+    notes TEXT,
+    source_context TEXT,
+    updated_by INTEGER REFERENCES users(id),
+    resolved_at TEXT,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_supply_risk_governance_status
+    ON supply_risk_governance(status);
+CREATE INDEX IF NOT EXISTS idx_supply_risk_governance_owner
+    ON supply_risk_governance(owner);
+CREATE INDEX IF NOT EXISTS idx_supply_risk_governance_action_type
+    ON supply_risk_governance(action_type);
+
+CREATE TABLE IF NOT EXISTS production_exception_governance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    exception_id INTEGER NOT NULL UNIQUE REFERENCES production_exceptions(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'open',
+    owner TEXT,
+    notes TEXT,
+    updated_by INTEGER REFERENCES users(id),
+    resolved_at TEXT,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_production_exception_governance_status
+    ON production_exception_governance(status);
+CREATE INDEX IF NOT EXISTS idx_production_exception_governance_owner
+    ON production_exception_governance(owner);
+
 -- ============================================
 -- 仓库
 -- ============================================
@@ -367,11 +425,17 @@ CREATE TABLE IF NOT EXISTS boms (
     name TEXT NOT NULL,
     code TEXT UNIQUE,
     version TEXT DEFAULT '1.0',
+    bom_level TEXT,
+    display_version TEXT DEFAULT 'V01',
     output_material_id INTEGER REFERENCES materials(id),
     output_quantity REAL DEFAULT 1,
     category TEXT,
     description TEXT,
     status TEXT DEFAULT 'active' CHECK(status IN ('active', 'draft', 'archived')),
+    naming_status TEXT DEFAULT 'warning',
+    naming_issues_json TEXT,
+    suggested_name TEXT,
+    naming_checked_at TEXT,
     name_pinyin TEXT,
     name_pinyin_abbr TEXT,
     created_by INTEGER REFERENCES users(id),

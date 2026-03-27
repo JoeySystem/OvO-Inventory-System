@@ -99,6 +99,7 @@ cp .env.example .env
 
 ```bash
 npm run check-env
+npm run preflight
 ```
 
 ### 4. 启动服务
@@ -161,6 +162,7 @@ npm start
 
 - 项目已完成 Node 24 兼容升级
 - 若部署机环境异常，先执行 `npm run check-env`
+- 正式部署、更新或回滚前，建议执行 `npm run preflight`
 
 ## 数据与代码分离
 

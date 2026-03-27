@@ -409,9 +409,14 @@ function getSupplyRiskItems(db, options = {}) {
     const search = String(options.search || '').trim().toLowerCase();
     const safetyBufferDays = Math.max(0, Number(options.safetyBufferDays ?? 3));
     const consumptionDays = Math.max(1, Number(options.consumptionDays || 30));
+    const governanceStatus = String(options.governanceStatus || '').trim();
+    const governanceClosure = String(options.closure || 'all').trim();
+    const governanceOwner = String(options.owner || '').trim().toLowerCase();
+    const actionTypeFilter = String(options.actionType || '').trim();
     const stockMap = getMaterialStockMap(db);
     const dailyConsumptionMap = getMaterialDailyConsumptionMap(db, consumptionDays);
     const kitCoverageMap = new Map(getKitCoverageItems(db, 1000).items.map(item => [Number(item.material_id), item]));
+    const governanceMap = getSupplyRiskGovernanceMap(db);
     const supplierSummaryMap = new Map();
     if (hasTable(db, 'material_suppliers')) {
         db.prepare(`
@@ -549,9 +554,25 @@ function getSupplyRiskItems(db, options = {}) {
             riskNotes: material.supply_risk_notes || null,
             recommendedActions
         };
+        const governance = governanceMap.get(Number(material.id)) || null;
+        const governanceMeta = getSupplyRiskGovernanceMeta(governance?.status);
         return {
             ...item,
-            procurementAdvice: buildSupplyRiskProcurementAdvice(item)
+            procurementAdvice: buildSupplyRiskProcurementAdvice(item),
+            governanceStatus: governance?.status || 'open',
+            governanceStatusLabel: governanceMeta.label,
+            governanceOwner: governance?.owner || '',
+            governanceNotes: governance?.notes || '',
+            governanceUpdatedAt: governance?.updated_at || null,
+            governanceUpdatedByName: governance?.updated_by_name || null,
+            governanceActionType: governance?.action_type || '',
+            governanceActionLabel: governance?.action_type === 'staging'
+                ? '备料任务'
+                : governance?.action_type === 'substitution'
+                    ? '替代治理任务'
+                    : '采购任务',
+            governanceSourceContext: governance?.source_context || null,
+            governanceIsProcessed: governanceMeta.isProcessed
         };
     }).filter(item => onlyWarning ? item.riskLevel !== 'normal' : true)
         .filter(item => {
@@ -571,6 +592,11 @@ function getSupplyRiskItems(db, options = {}) {
             if (options.leadTimeBucket === 'gte7' && item.effectiveLeadTimeDays < 7) return false;
             if (options.leadTimeBucket === 'gte14' && item.effectiveLeadTimeDays < 14) return false;
             if (options.leadTimeBucket === 'gte30' && item.effectiveLeadTimeDays < 30) return false;
+            if (governanceStatus && item.governanceStatus !== governanceStatus) return false;
+            if (governanceClosure === 'open' && item.governanceIsProcessed) return false;
+            if (governanceClosure === 'processed' && !item.governanceIsProcessed) return false;
+            if (governanceOwner && !String(item.governanceOwner || '').toLowerCase().includes(governanceOwner)) return false;
+            if (actionTypeFilter && String(item.governanceActionType || '') !== actionTypeFilter) return false;
             return true;
         })
         .sort((a, b) => {
@@ -590,7 +616,13 @@ function getSupplyRiskItems(db, options = {}) {
         longLeadTimeCount: items.filter(item => item.effectiveLeadTimeDays >= 7).length,
         keyPartCount: items.filter(item => item.isKeyPart).length,
         noSubstitutionCount: items.filter(item => !item.hasSubstitution).length,
-        coverageGapCount: items.filter(item => item.coverageRiskGapDays !== null && item.coverageRiskGapDays > 0).length
+        coverageGapCount: items.filter(item => item.coverageRiskGapDays !== null && item.coverageRiskGapDays > 0).length,
+        governanceOpenCount: items.filter(item => item.governanceStatus === 'open').length,
+        governanceInProgressCount: items.filter(item => item.governanceStatus === 'in_progress').length,
+        governanceProcessedCount: items.filter(item => ['resolved', 'ignored'].includes(item.governanceStatus)).length,
+        procurementTaskCount: items.filter(item => item.governanceActionType === 'procurement').length,
+        stagingTaskCount: items.filter(item => item.governanceActionType === 'staging').length,
+        substitutionTaskCount: items.filter(item => item.governanceActionType === 'substitution').length
     };
 
     return {
@@ -824,12 +856,61 @@ function getInventoryConsistencyRecommendations(summary) {
     return recommendations;
 }
 
+function buildInventoryConsistencyIssueKey(issueType, materialId, warehouseId) {
+    return `${issueType}:${Number(materialId)}:${Number(warehouseId)}`;
+}
+
+function getInventoryConsistencyGovernanceMeta(status) {
+    const normalized = String(status || 'open').trim() || 'open';
+    const map = {
+        open: { label: '待处理', isProcessed: false },
+        in_progress: { label: '处理中', isProcessed: false },
+        resolved: { label: '已处理', isProcessed: true },
+        ignored: { label: '已忽略', isProcessed: true }
+    };
+    return map[normalized] || map.open;
+}
+
+function getInventoryConsistencyGovernanceMap(db) {
+    if (!hasColumn(db, 'inventory_consistency_governance', 'issue_key')) return new Map();
+    const rows = db.prepare(`
+        SELECT icg.*, u.display_name as updated_by_name
+        FROM inventory_consistency_governance icg
+        LEFT JOIN users u ON u.id = icg.updated_by
+    `).all();
+    return new Map(rows.map(row => [row.issue_key, row]));
+}
+
+function getSupplyRiskGovernanceMeta(status) {
+    const normalized = String(status || 'open').trim() || 'open';
+    const map = {
+        open: { label: '待处理', isProcessed: false },
+        in_progress: { label: '处理中', isProcessed: false },
+        resolved: { label: '已处理', isProcessed: true },
+        ignored: { label: '已忽略', isProcessed: true }
+    };
+    return map[normalized] || map.open;
+}
+
+function getSupplyRiskGovernanceMap(db) {
+    if (!hasColumn(db, 'supply_risk_governance', 'material_id')) return new Map();
+    const rows = db.prepare(`
+        SELECT srg.*, u.display_name as updated_by_name
+        FROM supply_risk_governance srg
+        LEFT JOIN users u ON u.id = srg.updated_by
+    `).all();
+    return new Map(rows.map(row => [Number(row.material_id), row]));
+}
+
 function getInventoryConsistencyDetails(db, options = {}) {
     const issueType = (options.issueType || 'all').trim();
     const warehouseId = Number(options.warehouseId || 0);
     const page = Math.max(Number(options.page || 1), 1);
     const limit = Math.max(1, Math.min(Number(options.limit || 20), 200));
     const keyword = String(options.search || '').trim().toLowerCase();
+    const governanceStatus = String(options.governanceStatus || '').trim();
+    const governanceOwner = String(options.owner || '').trim().toLowerCase();
+    const governanceClosure = String(options.closure || 'all').trim();
 
     const mismatchRows = db.prepare(`
         WITH movement_balance AS (
@@ -913,9 +994,11 @@ function getInventoryConsistencyDetails(db, options = {}) {
         )
     `).all();
 
+    const governanceMap = getInventoryConsistencyGovernanceMap(db);
+
     const issues = [
         ...negativeRows.map(row => ({
-            id: `negative-${row.material_id}-${row.warehouse_id}`,
+            issueKey: buildInventoryConsistencyIssueKey('negative', row.material_id, row.warehouse_id),
             issueType: 'negative',
             issueTypeLabel: '负库存',
             severity: 'blocking',
@@ -934,7 +1017,7 @@ function getInventoryConsistencyDetails(db, options = {}) {
             sortValue: Math.abs(Number(row.inventory_qty || 0))
         })),
         ...mismatchRows.map(row => ({
-            id: `mismatch-${row.material_id}-${row.warehouse_id}`,
+            issueKey: buildInventoryConsistencyIssueKey('mismatch', row.material_id, row.warehouse_id),
             issueType: 'mismatch',
             issueTypeLabel: '余额/流水不一致',
             severity: 'blocking',
@@ -953,7 +1036,7 @@ function getInventoryConsistencyDetails(db, options = {}) {
             sortValue: Math.abs(Number(row.gap_qty || 0))
         })),
         ...noMovementBaselineRows.map(row => ({
-            id: `baseline-${row.material_id}-${row.warehouse_id}`,
+            issueKey: buildInventoryConsistencyIssueKey('no-baseline', row.material_id, row.warehouse_id),
             issueType: 'no-baseline',
             issueTypeLabel: '无流水历史基线',
             severity: 'warning',
@@ -971,11 +1054,35 @@ function getInventoryConsistencyDetails(db, options = {}) {
             reason: '当前库存有余额，但没有找到对应流水，通常代表历史期初或迁移基线未标准化。',
             sortValue: Math.abs(Number(row.inventory_qty || 0))
         }))
-    ];
+    ].map(item => {
+        const governance = governanceMap.get(item.issueKey);
+        const governanceStatusValue = governance?.status || 'open';
+        const governanceMeta = getInventoryConsistencyGovernanceMeta(governanceStatusValue);
+        return {
+            ...item,
+            id: item.issueKey,
+            governanceStatus: governanceStatusValue,
+            governanceStatusLabel: governanceMeta.label,
+            governanceOwner: governance?.owner || '',
+            governanceNotes: governance?.notes || '',
+            governanceUpdatedAt: governance?.updated_at || null,
+            governanceUpdatedByName: governance?.updated_by_name || null,
+            isProcessed: governanceMeta.isProcessed
+        };
+    });
 
     const filteredIssues = issues
         .filter(item => issueType === 'all' || item.issueType === issueType)
         .filter(item => !warehouseId || item.warehouseId === warehouseId)
+        .filter(item => !governanceStatus || item.governanceStatus === governanceStatus)
+        .filter(item => {
+            if (governanceClosure === 'all') return true;
+            return governanceClosure === 'processed' ? item.isProcessed : !item.isProcessed;
+        })
+        .filter(item => {
+            if (!governanceOwner) return true;
+            return String(item.governanceOwner || '').toLowerCase().includes(governanceOwner);
+        })
         .filter(item => {
             if (!keyword) return true;
             const text = [
@@ -984,7 +1091,9 @@ function getInventoryConsistencyDetails(db, options = {}) {
                 item.materialSpec,
                 item.warehouseName,
                 item.issueTypeLabel,
-                item.reason
+                item.reason,
+                item.governanceOwner,
+                item.governanceNotes
             ].filter(Boolean).join(' ').toLowerCase();
             return text.includes(keyword);
         })
@@ -1004,6 +1113,11 @@ function getInventoryConsistencyDetails(db, options = {}) {
         noMovementBaselineCount: noMovementBaselineRows.length,
         mismatchCount: mismatchRows.length,
         blockingCount: negativeRows.length + mismatchRows.length,
+        governanceOpenCount: issues.filter(item => item.governanceStatus === 'open').length,
+        governanceInProgressCount: issues.filter(item => item.governanceStatus === 'in_progress').length,
+        governanceResolvedCount: issues.filter(item => item.governanceStatus === 'resolved').length,
+        governanceIgnoredCount: issues.filter(item => item.governanceStatus === 'ignored').length,
+        governanceProcessedCount: issues.filter(item => item.isProcessed).length,
         sample: mismatchRows.slice(0, 20).map(row => ({
             material_id: row.material_id,
             warehouse_id: row.warehouse_id,
@@ -1021,6 +1135,12 @@ function getInventoryConsistencyDetails(db, options = {}) {
             { type: 'negative', label: '负库存', count: negativeRows.length, severity: 'blocking' },
             { type: 'mismatch', label: '余额/流水不一致', count: mismatchRows.length, severity: 'blocking' },
             { type: 'no-baseline', label: '无流水历史基线', count: noMovementBaselineRows.length, severity: 'warning' }
+        ],
+        governanceSummary: [
+            { status: 'open', label: '待处理', count: issues.filter(item => item.governanceStatus === 'open').length },
+            { status: 'in_progress', label: '处理中', count: issues.filter(item => item.governanceStatus === 'in_progress').length },
+            { status: 'resolved', label: '已处理', count: issues.filter(item => item.governanceStatus === 'resolved').length },
+            { status: 'ignored', label: '已忽略', count: issues.filter(item => item.governanceStatus === 'ignored').length }
         ],
         items: pagedItems,
         pagination: {
@@ -1184,6 +1304,10 @@ router.get('/supply-risk-items', requirePermission('reports', 'view'), (req, res
     const hasSubstitution = req.query.hasSubstitution === '' || req.query.hasSubstitution === undefined
         ? null
         : req.query.hasSubstitution === '1';
+    const governanceStatus = String(req.query.governanceStatus || '').trim() || null;
+    const closure = String(req.query.closure || 'all').trim() || 'all';
+    const owner = String(req.query.owner || '').trim() || null;
+    const actionType = String(req.query.actionType || '').trim() || null;
     const data = getSupplyRiskItems(db, {
         limit: 1000,
         onlyWarning,
@@ -1193,13 +1317,100 @@ router.get('/supply-risk-items', requirePermission('reports', 'view'), (req, res
         search,
         singleSource,
         isKeyPart,
-        hasSubstitution
+        hasSubstitution,
+        governanceStatus,
+        closure,
+        owner,
+        actionType
     });
     res.json({
         success: true,
         data: {
             summary: data.summary,
             items: data.items.slice(0, limit)
+        }
+    });
+});
+
+router.post('/supply-risk/governance', requirePermission('reports', 'edit'), (req, res) => {
+    const db = getDB();
+    const materialId = Number(req.body?.materialId || 0);
+    const actionType = String(req.body?.actionType || 'procurement').trim();
+    const status = String(req.body?.status || 'open').trim();
+    const owner = String(req.body?.owner || '').trim();
+    const notes = String(req.body?.notes || '').trim();
+    const sourceContext = String(req.body?.sourceContext || '').trim();
+    const allowedStatuses = new Set(['open', 'in_progress', 'resolved', 'ignored']);
+    const allowedActionTypes = new Set(['procurement', 'staging', 'substitution']);
+
+    if (!materialId) {
+        return res.status(400).json({
+            success: false,
+            error: { code: 'VALIDATION_ERROR', message: '缺少物料标识' }
+        });
+    }
+    if (!allowedStatuses.has(status)) {
+        return res.status(400).json({
+            success: false,
+            error: { code: 'VALIDATION_ERROR', message: '治理状态不合法' }
+        });
+    }
+    if (!allowedActionTypes.has(actionType)) {
+        return res.status(400).json({
+            success: false,
+            error: { code: 'VALIDATION_ERROR', message: '治理动作类型不合法' }
+        });
+    }
+
+    db.prepare(`
+        INSERT INTO supply_risk_governance (
+            material_id, action_type, status, owner, notes, source_context, updated_by, resolved_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IN ('resolved', 'ignored') THEN datetime('now', 'localtime') ELSE NULL END, datetime('now', 'localtime'))
+        ON CONFLICT(material_id) DO UPDATE SET
+            action_type = excluded.action_type,
+            status = excluded.status,
+            owner = excluded.owner,
+            notes = excluded.notes,
+            source_context = excluded.source_context,
+            updated_by = excluded.updated_by,
+            resolved_at = CASE
+                WHEN excluded.status IN ('resolved', 'ignored') THEN datetime('now', 'localtime')
+                ELSE NULL
+            END,
+            updated_at = datetime('now', 'localtime')
+    `).run(
+        materialId,
+        actionType,
+        status,
+        owner || null,
+        notes || null,
+        sourceContext || null,
+        req.session.user.id,
+        status
+    );
+
+    const row = db.prepare(`
+        SELECT srg.*, u.display_name as updated_by_name
+        FROM supply_risk_governance srg
+        LEFT JOIN users u ON u.id = srg.updated_by
+        WHERE srg.material_id = ?
+    `).get(materialId);
+    const meta = getSupplyRiskGovernanceMeta(row?.status);
+    return res.json({
+        success: true,
+        data: {
+            item: {
+                materialId,
+                governanceStatus: row?.status || 'open',
+                governanceStatusLabel: meta.label,
+                governanceOwner: row?.owner || '',
+                governanceNotes: row?.notes || '',
+                governanceUpdatedAt: row?.updated_at || null,
+                governanceUpdatedByName: row?.updated_by_name || null,
+                governanceActionType: row?.action_type || '',
+                governanceSourceContext: row?.source_context || null,
+                governanceIsProcessed: meta.isProcessed
+            }
         }
     });
 });
@@ -2109,10 +2320,90 @@ router.get('/inventory-consistency/issues', requirePermission('reports', 'view')
         issueType: req.query.issueType,
         warehouseId: req.query.warehouseId,
         search: req.query.search,
+        governanceStatus: req.query.governanceStatus,
+        closure: req.query.closure,
+        owner: req.query.owner,
         page: req.query.page,
         limit: req.query.limit
     });
     res.json({ success: true, data });
+});
+
+router.post('/inventory-consistency/issues/governance', requirePermission('reports', 'edit'), (req, res) => {
+    const db = getDB();
+    const issueKey = String(req.body?.issueKey || '').trim();
+    const issueType = String(req.body?.issueType || '').trim();
+    const materialId = Number(req.body?.materialId || 0);
+    const warehouseId = Number(req.body?.warehouseId || 0);
+    const status = String(req.body?.status || 'open').trim();
+    const owner = String(req.body?.owner || '').trim();
+    const notes = String(req.body?.notes || '').trim();
+    const allowedStatuses = new Set(['open', 'in_progress', 'resolved', 'ignored']);
+
+    if (!issueKey || !issueType || !materialId || !warehouseId) {
+        return res.status(400).json({
+            success: false,
+            error: { code: 'VALIDATION_ERROR', message: '缺少治理台账必填字段' }
+        });
+    }
+    if (!allowedStatuses.has(status)) {
+        return res.status(400).json({
+            success: false,
+            error: { code: 'VALIDATION_ERROR', message: '问题状态不合法' }
+        });
+    }
+
+    db.prepare(`
+        INSERT INTO inventory_consistency_governance (
+            issue_key, issue_type, material_id, warehouse_id, status, owner, notes, updated_by, resolved_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IN ('resolved', 'ignored') THEN datetime('now', 'localtime') ELSE NULL END, datetime('now', 'localtime'))
+        ON CONFLICT(issue_key) DO UPDATE SET
+            issue_type = excluded.issue_type,
+            material_id = excluded.material_id,
+            warehouse_id = excluded.warehouse_id,
+            status = excluded.status,
+            owner = excluded.owner,
+            notes = excluded.notes,
+            updated_by = excluded.updated_by,
+            resolved_at = CASE
+                WHEN excluded.status IN ('resolved', 'ignored') THEN datetime('now', 'localtime')
+                ELSE NULL
+            END,
+            updated_at = datetime('now', 'localtime')
+    `).run(
+        issueKey,
+        issueType,
+        materialId,
+        warehouseId,
+        status,
+        owner || null,
+        notes || null,
+        req.session.user.id,
+        status
+    );
+
+    const row = db.prepare(`
+        SELECT icg.*, u.display_name as updated_by_name
+        FROM inventory_consistency_governance icg
+        LEFT JOIN users u ON u.id = icg.updated_by
+        WHERE icg.issue_key = ?
+    `).get(issueKey);
+
+    return res.json({
+        success: true,
+        data: {
+            item: {
+                issueKey: row.issue_key,
+                governanceStatus: row.status,
+                governanceStatusLabel: getInventoryConsistencyGovernanceMeta(row.status).label,
+                governanceOwner: row.owner || '',
+                governanceNotes: row.notes || '',
+                governanceUpdatedAt: row.updated_at || null,
+                governanceUpdatedByName: row.updated_by_name || null,
+                isProcessed: getInventoryConsistencyGovernanceMeta(row.status).isProcessed
+            }
+        }
+    });
 });
 
 router.get('/inventory-consistency/export', requirePermission('reports', 'view'), async (req, res) => {
@@ -2122,6 +2413,9 @@ router.get('/inventory-consistency/export', requirePermission('reports', 'view')
         issueType: req.query.issueType,
         warehouseId: req.query.warehouseId,
         search: req.query.search,
+        governanceStatus: req.query.governanceStatus,
+        closure: req.query.closure,
+        owner: req.query.owner,
         page: 1,
         limit: 5000
     });
@@ -2136,6 +2430,9 @@ router.get('/inventory-consistency/export', requirePermission('reports', 'view')
         { key: 'inventoryQty', label: '账面库存', width: 12 },
         { key: 'movementQty', label: '流水净额', width: 12 },
         { key: 'gapQty', label: '差值', width: 12 },
+        { key: 'governanceStatusLabel', label: '治理状态', width: 12 },
+        { key: 'governanceOwner', label: '责任人', width: 16 },
+        { key: 'governanceNotes', label: '处理备注', width: 30 },
         { key: 'reason', label: '治理提示', width: 60 }
     ];
     const rows = data.items.map(item => ({
@@ -2148,6 +2445,9 @@ router.get('/inventory-consistency/export', requirePermission('reports', 'view')
         inventoryQty: item.inventoryQty,
         movementQty: item.movementQty,
         gapQty: item.gapQty,
+        governanceStatusLabel: item.governanceStatusLabel,
+        governanceOwner: item.governanceOwner,
+        governanceNotes: item.governanceNotes,
         reason: item.reason
     }));
     const today = new Date().toISOString().slice(0, 10);

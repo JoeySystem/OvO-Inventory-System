@@ -573,11 +573,51 @@ function hydrateProductionDocument(db, documentId) {
     return documentId ? getDocumentById(db, documentId) : null;
 }
 
+function getProductionExceptionGovernanceMeta(status) {
+    const normalized = String(status || 'open').trim() || 'open';
+    const map = {
+        open: { label: '待处理', isProcessed: false },
+        in_progress: { label: '处理中', isProcessed: false },
+        resolved: { label: '已处理', isProcessed: true },
+        ignored: { label: '已忽略', isProcessed: true }
+    };
+    return map[normalized] || map.open;
+}
+
+function getProductionExceptionGovernanceMap(db) {
+    const hasTableRow = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'production_exception_governance'"
+    ).get();
+    if (!hasTableRow) return new Map();
+    const rows = db.prepare(`
+        SELECT peg.*, u.display_name as updated_by_name
+        FROM production_exception_governance peg
+        LEFT JOIN users u ON u.id = peg.updated_by
+    `).all();
+    return new Map(rows.map(row => [Number(row.exception_id), row]));
+}
+
+function attachProductionExceptionGovernance(item, governanceRow) {
+    const governanceStatus = governanceRow?.status || 'open';
+    const meta = getProductionExceptionGovernanceMeta(governanceStatus);
+    return {
+        ...item,
+        governanceStatus,
+        governanceStatusLabel: meta.label,
+        governanceOwner: governanceRow?.owner || '',
+        governanceNotes: governanceRow?.notes || '',
+        governanceUpdatedAt: governanceRow?.updated_at || null,
+        governanceUpdatedByName: governanceRow?.updated_by_name || null,
+        governanceIsProcessed: meta.isProcessed
+    };
+}
+
 function listProductionDocuments(db, orderId, docType) {
     return listDocumentsByOrigin(db, 'production_order', Number(orderId), docType);
 }
 
 function listProductionExceptions(db, orderId) {
+    const governanceMap = getProductionExceptionGovernanceMap(db);
     return db.prepare(`
         SELECT pe.*, m.name as material_name, m.code as material_code, m.unit,
                origin.exception_no as reversal_of_exception_no,
@@ -610,22 +650,11 @@ function listProductionExceptions(db, orderId) {
         createdAt: row.created_at,
         stockDocumentId: row.stock_document_id || null,
         document: row.stock_document_id ? getDocumentById(db, row.stock_document_id) : null
-    }));
+    })).map(item => attachProductionExceptionGovernance(item, governanceMap.get(Number(item.id))));
 }
 
-function getProductionExceptionById(db, orderId, exceptionId) {
-    const row = db.prepare(`
-        SELECT pe.*, m.name as material_name, m.code as material_code, m.unit,
-               origin.exception_no as reversal_of_exception_no,
-               child.exception_no as reversed_by_exception_no
-        FROM production_exceptions pe
-        LEFT JOIN materials m ON pe.material_id = m.id
-        LEFT JOIN production_exceptions origin ON pe.reversal_of_exception_id = origin.id
-        LEFT JOIN production_exceptions child ON pe.reversed_by_exception_id = child.id
-        WHERE pe.id = ? AND pe.order_id = ?
-    `).get(exceptionId, orderId);
-
-    if (!row) throw new NotFoundError('工单异常单');
+function mapProductionExceptionRow(db, row) {
+    if (!row) return null;
     return {
         id: row.id,
         exceptionNo: row.exception_no,
@@ -647,8 +676,35 @@ function getProductionExceptionById(db, orderId, exceptionId) {
         notes: row.notes || null,
         createdAt: row.created_at,
         stockDocumentId: row.stock_document_id || null,
+        orderId: row.order_id || null,
+        orderNo: row.order_no || null,
+        warehouseId: row.warehouse_id || null,
+        warehouseName: row.warehouse_name || null,
+        operatorName: row.operator_name || null,
+        stockDocumentNo: row.stock_document_no || null,
+        stockDocumentStatus: row.stock_document_status || null,
         document: row.stock_document_id ? getDocumentById(db, row.stock_document_id) : null
     };
+}
+
+function getProductionExceptionById(db, orderId, exceptionId) {
+    const row = db.prepare(`
+        SELECT pe.*, m.name as material_name, m.code as material_code, m.unit,
+               origin.exception_no as reversal_of_exception_no,
+               child.exception_no as reversed_by_exception_no
+        FROM production_exceptions pe
+        LEFT JOIN materials m ON pe.material_id = m.id
+        LEFT JOIN production_exceptions origin ON pe.reversal_of_exception_id = origin.id
+        LEFT JOIN production_exceptions child ON pe.reversed_by_exception_id = child.id
+        WHERE pe.id = ? AND pe.order_id = ?
+    `).get(exceptionId, orderId);
+
+    if (!row) throw new NotFoundError('工单异常单');
+    const governanceMap = getProductionExceptionGovernanceMap(db);
+    return attachProductionExceptionGovernance(
+        mapProductionExceptionRow(db, row),
+        governanceMap.get(Number(row.id))
+    );
 }
 
 function buildProductionExceptionDocumentPayload(order, exceptionType, direction, materialId, quantity, notes) {
@@ -739,6 +795,199 @@ router.get('/', requirePermission('production', 'view'), (req, res) => {
         data: {
             orders: mappedOrders,
             pagination: { page: parseInt(page), limit: parseInt(limit), total, totalPages: Math.ceil(total / parseInt(limit)) }
+        }
+    });
+});
+
+/**
+ * GET /api/production/exceptions
+ * 独立生产异常单列表
+ */
+router.get('/exceptions', requirePermission('production', 'view'), (req, res) => {
+    const db = getDB();
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+    const offset = (page - 1) * limit;
+    const status = String(req.query.status || '').trim();
+    const exceptionType = String(req.query.exceptionType || '').trim();
+    const warehouseId = String(req.query.warehouseId || '').trim();
+    const materialId = String(req.query.materialId || '').trim();
+    const orderNo = String(req.query.orderNo || '').trim();
+    const exceptionNo = String(req.query.exceptionNo || '').trim();
+    const startDate = String(req.query.startDate || '').trim();
+    const endDate = String(req.query.endDate || '').trim();
+    const governanceStatus = String(req.query.governanceStatus || '').trim();
+    const governanceOwner = String(req.query.owner || '').trim().toLowerCase();
+    const governanceClosure = String(req.query.closure || 'all').trim();
+
+    const where = ['1=1'];
+    const params = [];
+    if (status) { where.push('pe.status = ?'); params.push(status); }
+    if (exceptionType) { where.push('pe.exception_type = ?'); params.push(exceptionType); }
+    if (warehouseId) { where.push('po.warehouse_id = ?'); params.push(warehouseId); }
+    if (materialId) { where.push('pe.material_id = ?'); params.push(materialId); }
+    if (orderNo) { where.push('po.order_no LIKE ?'); params.push(`%${orderNo}%`); }
+    if (exceptionNo) { where.push('pe.exception_no LIKE ?'); params.push(`%${exceptionNo}%`); }
+    if (startDate) { where.push("date(pe.created_at) >= date(?)"); params.push(startDate); }
+    if (endDate) { where.push("date(pe.created_at) <= date(?)"); params.push(endDate); }
+
+    const whereSQL = where.join(' AND ');
+    const governanceMap = getProductionExceptionGovernanceMap(db);
+    const rows = db.prepare(`
+        SELECT pe.*, po.order_no, po.warehouse_id, w.name as warehouse_name,
+               m.name as material_name, m.code as material_code, m.unit,
+               u.display_name as operator_name,
+               origin.exception_no as reversal_of_exception_no,
+               child.exception_no as reversed_by_exception_no,
+               sd.doc_no as stock_document_no,
+               sd.status as stock_document_status
+        FROM production_exceptions pe
+        LEFT JOIN production_orders po ON po.id = pe.order_id
+        LEFT JOIN warehouses w ON w.id = po.warehouse_id
+        LEFT JOIN materials m ON m.id = pe.material_id
+        LEFT JOIN users u ON u.id = pe.created_by
+        LEFT JOIN production_exceptions origin ON origin.id = pe.reversal_of_exception_id
+        LEFT JOIN production_exceptions child ON child.id = pe.reversed_by_exception_id
+        LEFT JOIN stock_documents sd ON sd.id = pe.stock_document_id
+        WHERE ${whereSQL}
+        ORDER BY pe.created_at DESC, pe.id DESC
+    `).all(...params).map(row => attachProductionExceptionGovernance(
+        mapProductionExceptionRow(db, row),
+        governanceMap.get(Number(row.id))
+    ));
+
+    const filteredRows = rows.filter(item => {
+        if (governanceStatus && item.governanceStatus !== governanceStatus) return false;
+        if (governanceClosure === 'open' && item.governanceIsProcessed) return false;
+        if (governanceClosure === 'processed' && !item.governanceIsProcessed) return false;
+        if (governanceOwner && !String(item.governanceOwner || '').toLowerCase().includes(governanceOwner)) return false;
+        return true;
+    });
+
+    const total = filteredRows.length;
+    const pagedRows = filteredRows.slice(offset, offset + limit);
+    const statusSummaryRows = Object.entries(filteredRows.reduce((acc, item) => {
+        acc[item.status || 'posted'] = (acc[item.status || 'posted'] || 0) + 1;
+        return acc;
+    }, {})).map(([statusValue, count]) => ({ status: statusValue, count }));
+    const exceptionSummaryRows = Object.entries(filteredRows.reduce((acc, item) => {
+        acc[item.exceptionType || 'unknown'] = (acc[item.exceptionType || 'unknown'] || 0) + 1;
+        return acc;
+    }, {})).map(([type, count]) => ({ exception_type: type, count }));
+    const governanceSummaryRows = ['open', 'in_progress', 'resolved', 'ignored'].map(statusValue => ({
+        status: statusValue,
+        count: filteredRows.filter(item => item.governanceStatus === statusValue).length
+    }));
+
+    res.json({
+        success: true,
+        data: {
+            items: pagedRows,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.max(Math.ceil(total / limit), 1)
+            },
+            statusSummary: statusSummaryRows,
+            exceptionSummary: exceptionSummaryRows,
+            governanceSummary: governanceSummaryRows
+        }
+    });
+});
+
+/**
+ * GET /api/production/exceptions/:id
+ * 独立生产异常单详情
+ */
+router.get('/exceptions/:id', requirePermission('production', 'view'), (req, res) => {
+    const db = getDB();
+    const row = db.prepare(`
+        SELECT pe.*, po.order_no, po.warehouse_id, w.name as warehouse_name,
+               m.name as material_name, m.code as material_code, m.unit,
+               u.display_name as operator_name,
+               origin.exception_no as reversal_of_exception_no,
+               child.exception_no as reversed_by_exception_no,
+               sd.doc_no as stock_document_no,
+               sd.status as stock_document_status
+        FROM production_exceptions pe
+        LEFT JOIN production_orders po ON po.id = pe.order_id
+        LEFT JOIN warehouses w ON w.id = po.warehouse_id
+        LEFT JOIN materials m ON m.id = pe.material_id
+        LEFT JOIN users u ON u.id = pe.created_by
+        LEFT JOIN production_exceptions origin ON origin.id = pe.reversal_of_exception_id
+        LEFT JOIN production_exceptions child ON child.id = pe.reversed_by_exception_id
+        LEFT JOIN stock_documents sd ON sd.id = pe.stock_document_id
+        WHERE pe.id = ?
+    `).get(req.params.id);
+
+    if (!row) {
+        throw new NotFoundError('生产异常单');
+    }
+
+    res.json({
+        success: true,
+        data: {
+            item: attachProductionExceptionGovernance(
+                mapProductionExceptionRow(db, row),
+                getProductionExceptionGovernanceMap(db).get(Number(row.id))
+            )
+        }
+    });
+});
+
+router.post('/exceptions/:id/governance', requirePermission('production', 'edit'), (req, res) => {
+    const db = getDB();
+    const exceptionId = Number(req.params.id || 0);
+    const status = String(req.body?.status || 'open').trim();
+    const owner = String(req.body?.owner || '').trim();
+    const notes = String(req.body?.notes || '').trim();
+    const allowedStatuses = new Set(['open', 'in_progress', 'resolved', 'ignored']);
+
+    if (!exceptionId) throw new ValidationError('缺少异常单标识');
+    if (!allowedStatuses.has(status)) throw new ValidationError('治理状态不合法');
+
+    const exists = db.prepare('SELECT id FROM production_exceptions WHERE id = ?').get(exceptionId);
+    if (!exists) throw new NotFoundError('生产异常单');
+
+    db.prepare(`
+        INSERT INTO production_exception_governance (
+            exception_id, status, owner, notes, updated_by, resolved_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, CASE WHEN ? IN ('resolved', 'ignored') THEN datetime('now', 'localtime') ELSE NULL END, datetime('now', 'localtime'))
+        ON CONFLICT(exception_id) DO UPDATE SET
+            status = excluded.status,
+            owner = excluded.owner,
+            notes = excluded.notes,
+            updated_by = excluded.updated_by,
+            resolved_at = CASE
+                WHEN excluded.status IN ('resolved', 'ignored') THEN datetime('now', 'localtime')
+                ELSE NULL
+            END,
+            updated_at = datetime('now', 'localtime')
+    `).run(
+        exceptionId,
+        status,
+        owner || null,
+        notes || null,
+        req.session.user.id,
+        status
+    );
+
+    const governanceRow = getProductionExceptionGovernanceMap(db).get(exceptionId);
+    const meta = getProductionExceptionGovernanceMeta(governanceRow?.status);
+    res.json({
+        success: true,
+        data: {
+            item: {
+                exceptionId,
+                governanceStatus: governanceRow?.status || 'open',
+                governanceStatusLabel: meta.label,
+                governanceOwner: governanceRow?.owner || '',
+                governanceNotes: governanceRow?.notes || '',
+                governanceUpdatedAt: governanceRow?.updated_at || null,
+                governanceUpdatedByName: governanceRow?.updated_by_name || null,
+                governanceIsProcessed: meta.isProcessed
+            }
         }
     });
 });

@@ -5,6 +5,7 @@
   "main": "server/index.js",
   "scripts": {
     "check-env": "node server/scripts/check-env.js",
+    "preflight": "node server/scripts/preflight.js",
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "init-db": "node server/db/init.js",

@@ -265,6 +265,7 @@ function hydrateDocument(db, row) {
         notes: row.notes || '',
         originType: row.origin_type || null,
         originId: row.origin_id || null,
+        originNo: row.origin_no || null,
         executedAt: row.executed_at || null,
         postedAt: row.posted_at || null,
         submittedAt: row.submitted_at || null,
@@ -332,11 +333,13 @@ function hydrateDocument(db, row) {
 function getDocumentById(db, id) {
     const row = db.prepare(`
         SELECT sd.*, w.name as warehouse_name, tw.name as to_warehouse_name,
+               po.order_no as origin_no,
                parent.doc_no as reversal_of_doc_no,
                child.doc_no as reversed_by_doc_no
         FROM stock_documents sd
         LEFT JOIN warehouses w ON sd.warehouse_id = w.id
         LEFT JOIN warehouses tw ON sd.to_warehouse_id = tw.id
+        LEFT JOIN production_orders po ON sd.origin_type = 'production_order' AND sd.origin_id = po.id
         LEFT JOIN stock_documents parent ON sd.reversal_of_document_id = parent.id
         LEFT JOIN stock_documents child ON sd.reversed_by_document_id = child.id
         WHERE sd.id = ?
@@ -361,11 +364,13 @@ function listDocumentsByOrigin(db, originType, originId, docType = null) {
 
     const rows = db.prepare(`
         SELECT sd.*, w.name as warehouse_name, tw.name as to_warehouse_name,
+               po.order_no as origin_no,
                parent.doc_no as reversal_of_doc_no,
                child.doc_no as reversed_by_doc_no
         FROM stock_documents sd
         LEFT JOIN warehouses w ON sd.warehouse_id = w.id
         LEFT JOIN warehouses tw ON sd.to_warehouse_id = tw.id
+        LEFT JOIN production_orders po ON sd.origin_type = 'production_order' AND sd.origin_id = po.id
         LEFT JOIN stock_documents parent ON sd.reversal_of_document_id = parent.id
         LEFT JOIN stock_documents child ON sd.reversed_by_document_id = child.id
         WHERE ${whereClauses.join(' AND ')}

@@ -323,6 +323,100 @@ function generateBomCode(db) {
     return `BOM-${today}-${String(seq).padStart(3, '0')}`;
 }
 
+const BOM_LEVEL_OPTIONS = ['整机', '模块', '板级', '配套件'];
+const BOM_NAMING_FORBIDDEN_TOKENS = ['.BOM', 'BOM', '模板', '最新版', '最终版', '新版', '改版'];
+
+function inferBomLevelFromName(name = '') {
+    const normalized = String(name || '').trim();
+    const matched = BOM_LEVEL_OPTIONS.find(level => normalized.startsWith(`${level}_`) || normalized.startsWith(level));
+    return matched || null;
+}
+
+function normalizeDisplayVersion(value, fallback = 'V01') {
+    const raw = String(value || '').trim().toUpperCase();
+    if (!raw) return fallback;
+    const directMatch = raw.match(/^V(\d{2})$/);
+    if (directMatch) return `V${directMatch[1]}`;
+    const decimalMatch = raw.match(/^(\d+)(?:\.(\d+))?$/);
+    if (decimalMatch) {
+        const major = Number(decimalMatch[1] || 0);
+        return `V${String(Math.max(major, 1)).padStart(2, '0')}`;
+    }
+    const looseMatch = raw.match(/(\d{1,2})/);
+    if (looseMatch) return `V${String(Number(looseMatch[1] || 1)).padStart(2, '0')}`;
+    return fallback;
+}
+
+function sanitizeBomNameCore(name = '', level = '') {
+    let value = String(name || '').trim();
+    if (level) {
+        value = value.replace(new RegExp(`^${level}[ _-]*`), '');
+    }
+    value = value
+        .replace(/20\d{2}[-/.年]?\d{1,2}[-/.月]?\d{1,2}日?/g, ' ')
+        .replace(/20\d{6}/g, ' ')
+        .replace(/[【】[\]()（）]/g, ' ')
+        .replace(/\bV\d{2}\b/gi, ' ');
+    BOM_NAMING_FORBIDDEN_TOKENS.forEach(token => {
+        value = value.replace(new RegExp(token.replace('.', '\\.'), 'gi'), ' ');
+    });
+    value = value
+        .replace(/[\\/]+/g, '_')
+        .replace(/[，,；;、]+/g, '_')
+        .replace(/\s+/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    return value || '未命名对象';
+}
+
+function evaluateBomNaming(payload = {}) {
+    const name = String(payload.name || '').trim();
+    const bomLevel = String(payload.bomLevel || '').trim() || inferBomLevelFromName(name) || '';
+    const displayVersion = normalizeDisplayVersion(payload.displayVersion || '', 'V01');
+    const issues = [];
+    const issueCodes = new Set();
+
+    function addIssue(code, label, severity = 'warning') {
+        if (issueCodes.has(code)) return;
+        issueCodes.add(code);
+        issues.push({ code, label, severity });
+    }
+
+    if (!bomLevel) addIssue('missing_level', '未设置 BOM 层级', 'warning');
+    if (payload.bomLevel && name && !name.startsWith(`${payload.bomLevel}_`)) {
+        addIssue('prefix_mismatch', '名称未按“层级_”前缀命名', 'error');
+    }
+    if (!/^V\d{2}$/.test(displayVersion)) {
+        addIssue('invalid_display_version', '显示版本应为 V01 / V02 格式', 'error');
+    }
+    if (name && !new RegExp(`_${displayVersion}$`, 'i').test(name)) {
+        addIssue('missing_version_suffix', '名称未以标准版本尾缀结尾', 'warning');
+    }
+    if (/20\d{2}[-/.年]?\d{1,2}[-/.月]?\d{1,2}日?/.test(name) || /20\d{6}/.test(name)) {
+        addIssue('date_in_name', '名称中包含日期信息', 'error');
+    }
+    BOM_NAMING_FORBIDDEN_TOKENS.forEach(token => {
+        if (token === 'BOM') {
+            if (/\bBOM\b/i.test(name) || /\.BOM/i.test(name)) addIssue(`forbidden_${token}`, `名称中包含禁用词 ${token}`, 'error');
+            return;
+        }
+        if (name.includes(token)) addIssue(`forbidden_${token}`, `名称中包含禁用词 ${token}`, 'error');
+    });
+
+    const suggestedCore = sanitizeBomNameCore(name, bomLevel || inferBomLevelFromName(name) || '');
+    const suggestedName = [bomLevel || '模块', suggestedCore, displayVersion].filter(Boolean).join('_');
+    const hasError = issues.some(item => item.severity === 'error');
+    const status = !issues.length ? 'compliant' : hasError ? 'non_compliant' : 'warning';
+
+    return {
+        bomLevel: bomLevel || null,
+        displayVersion,
+        namingStatus: status,
+        namingIssues: issues,
+        suggestedName
+    };
+}
+
 /**
  * 递归展开 BOM（多级），带循环检测
  */
@@ -413,7 +507,10 @@ router.get('/', requirePermission('boms', 'view'), (req, res) => {
     let whereClauses = ['b.is_active = 1'];
     let params = [];
 
+    const { namingStatus, bomLevel } = req.query;
     if (status) { whereClauses.push('b.status = ?'); params.push(status); }
+    if (namingStatus) { whereClauses.push('COALESCE(b.naming_status, ?) = ?'); params.push('warning', namingStatus); }
+    if (bomLevel) { whereClauses.push('COALESCE(b.bom_level, ?) = ?'); params.push('', bomLevel); }
     if (q) {
         const term = `%${q.toLowerCase()}%`;
         whereClauses.push('(LOWER(b.name) LIKE ? OR b.name_pinyin LIKE ? OR b.name_pinyin_abbr LIKE ? OR LOWER(b.code) LIKE ?)');
@@ -447,6 +544,54 @@ router.get('/', requirePermission('boms', 'view'), (req, res) => {
     });
 });
 
+router.get('/naming-governance/summary', requirePermission('boms', 'view'), (req, res) => {
+    const db = getDB();
+    const { q = '', namingStatus = '', bomLevel = '' } = req.query;
+    let whereClauses = ['b.is_active = 1'];
+    const params = [];
+    if (q) {
+        const term = `%${String(q).toLowerCase()}%`;
+        whereClauses.push('(LOWER(b.name) LIKE ? OR LOWER(COALESCE(b.code, \'\')) LIKE ?)');
+        params.push(term, term);
+    }
+    if (namingStatus) {
+        whereClauses.push('COALESCE(b.naming_status, ?) = ?');
+        params.push('warning', namingStatus);
+    }
+    if (bomLevel) {
+        whereClauses.push('COALESCE(b.bom_level, ?) = ?');
+        params.push('', bomLevel);
+    }
+    const whereSQL = whereClauses.join(' AND ');
+    const items = db.prepare(`
+        SELECT b.id, b.name, b.code, b.version, b.display_version, b.bom_level, b.status,
+               COALESCE(b.naming_status, 'warning') as naming_status,
+               b.naming_issues_json, b.suggested_name, b.updated_at,
+               om.name as output_material_name,
+               (SELECT COUNT(*) FROM bom_items bi WHERE bi.bom_id = b.id) as item_count
+        FROM boms b
+        LEFT JOIN materials om ON b.output_material_id = om.id
+        WHERE ${whereSQL}
+        ORDER BY CASE COALESCE(b.naming_status, 'warning')
+            WHEN 'non_compliant' THEN 1
+            WHEN 'warning' THEN 2
+            ELSE 3 END,
+            b.updated_at DESC
+    `).all(...params).map(item => ({
+        ...item,
+        naming_issues: item.naming_issues_json ? JSON.parse(item.naming_issues_json) : []
+    }));
+
+    const summary = {
+        total: items.length,
+        compliant: items.filter(item => item.naming_status === 'compliant').length,
+        warning: items.filter(item => item.naming_status === 'warning').length,
+        nonCompliant: items.filter(item => item.naming_status === 'non_compliant').length
+    };
+
+    res.json({ success: true, data: { summary, items } });
+});
+
 /**
  * GET /api/boms/:id
  */
@@ -464,14 +609,10 @@ router.get('/:id', requirePermission('boms', 'view'), (req, res) => {
 
     if (!bom) throw new NotFoundError('BOM');
 
-    // 多级展开
     const tree = expandBom(db, bom.id);
     const flatItems = flattenBom(tree);
-
-    // 成本汇总
     const totalCost = tree.reduce((sum, item) => sum + (item.line_cost || 0), 0);
 
-    // 叶子物料汇总（合并相同物料）
     const leafMaterials = {};
     for (const item of flatItems) {
         if (!item.is_sub_bom && item.material_id) {
@@ -494,7 +635,6 @@ router.get('/:id', requirePermission('boms', 'view'), (req, res) => {
         }
     }
 
-    // 版本数
     const versionCount = db.prepare('SELECT COUNT(*) as cnt FROM bom_versions WHERE bom_id = ?').get(bom.id).cnt;
 
     res.json({
@@ -644,6 +784,11 @@ router.post('/import/commit', requirePermission('boms', 'add'), (req, res) => {
 
         preview.items.forEach(item => {
             const name = item.name;
+            const naming = evaluateBomNaming({
+                name,
+                bomLevel: inferBomLevelFromName(name),
+                displayVersion: item.version || 'V01'
+            });
             const { fullPinyin, abbr } = generatePinyinFields(name);
 
             if (item.bomId) {
@@ -676,7 +821,8 @@ router.post('/import/commit', requirePermission('boms', 'add'), (req, res) => {
                 db.prepare(`
                     UPDATE boms
                     SET name = ?, output_material_id = ?, output_quantity = 1, category = ?, description = ?, status = ?,
-                        version = ?, name_pinyin = ?, name_pinyin_abbr = ?, updated_at = datetime('now','localtime')
+                        version = ?, name_pinyin = ?, name_pinyin_abbr = ?, updated_at = datetime('now','localtime'),
+                        bom_level = ?, display_version = ?, naming_status = ?, naming_issues_json = ?, suggested_name = ?, naming_checked_at = datetime('now','localtime')
                     WHERE id = ?
                 `).run(
                     name,
@@ -687,6 +833,11 @@ router.post('/import/commit', requirePermission('boms', 'add'), (req, res) => {
                     newVersion,
                     fullPinyin,
                     abbr,
+                    naming.bomLevel,
+                    naming.displayVersion,
+                    naming.namingStatus,
+                    JSON.stringify(naming.namingIssues),
+                    naming.suggestedName,
                     item.bomId
                 );
 
@@ -701,8 +852,9 @@ router.post('/import/commit', requirePermission('boms', 'add'), (req, res) => {
             } else {
                 const code = generateBomCode(db);
                 const result = db.prepare(`
-                    INSERT INTO boms (name, code, output_material_id, output_quantity, category, description, status, name_pinyin, name_pinyin_abbr, created_by)
-                    VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO boms (name, code, output_material_id, output_quantity, category, description, status, name_pinyin, name_pinyin_abbr, created_by,
+                                      bom_level, display_version, naming_status, naming_issues_json, suggested_name, naming_checked_at)
+                    VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))
                 `).run(
                     name,
                     code,
@@ -712,7 +864,12 @@ router.post('/import/commit', requirePermission('boms', 'add'), (req, res) => {
                     item.status || 'active',
                     fullPinyin,
                     abbr,
-                    req.session.user.id
+                    req.session.user.id,
+                    naming.bomLevel,
+                    naming.displayVersion,
+                    naming.namingStatus,
+                    JSON.stringify(naming.namingIssues),
+                    naming.suggestedName
                 );
                 const bomId = Number(result.lastInsertRowid);
                 item.items.forEach((detail, index) => {
@@ -747,10 +904,11 @@ router.post('/import/commit', requirePermission('boms', 'add'), (req, res) => {
  */
 router.post('/', requirePermission('boms', 'add'), (req, res) => {
     const db = getDB();
-    const { name, outputMaterialId, outputQuantity = 1, category, description, status = 'active', items = [] } = req.body;
+    const { name, outputMaterialId, outputQuantity = 1, category, description, status = 'active', items = [], bomLevel, displayVersion } = req.body;
 
     if (!name || !name.trim()) throw new ValidationError('BOM 名称不能为空');
 
+    const naming = evaluateBomNaming({ name, bomLevel, displayVersion });
     const { fullPinyin, abbr } = generatePinyinFields(name.trim());
 
     if (outputMaterialId) {
@@ -761,9 +919,14 @@ router.post('/', requirePermission('boms', 'add'), (req, res) => {
     const doCreate = db.transaction(() => {
         const code = generateBomCode(db);
         const result = db.prepare(`
-            INSERT INTO boms (name, code, output_material_id, output_quantity, category, description, status, name_pinyin, name_pinyin_abbr, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(name.trim(), code, outputMaterialId || null, outputQuantity, category || null, description || null, status, fullPinyin, abbr, req.session.user.id);
+            INSERT INTO boms (name, code, output_material_id, output_quantity, category, description, status, name_pinyin, name_pinyin_abbr, created_by,
+                              bom_level, display_version, naming_status, naming_issues_json, suggested_name, naming_checked_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))
+        `).run(
+            name.trim(), code, outputMaterialId || null, outputQuantity, category || null, description || null, status,
+            fullPinyin, abbr, req.session.user.id,
+            naming.bomLevel, naming.displayVersion, naming.namingStatus, JSON.stringify(naming.namingIssues), naming.suggestedName
+        );
 
         const bomId = result.lastInsertRowid;
 
@@ -792,7 +955,7 @@ router.post('/', requirePermission('boms', 'add'), (req, res) => {
         resourceId: bomId, detail: `创建 BOM: ${name} (${code})`, ip: req.ip
     });
 
-    res.status(201).json({ success: true, data: { id: bomId, code } });
+    res.status(201).json({ success: true, data: { id: bomId, code, naming } });
 });
 
 /**
@@ -803,7 +966,7 @@ router.put('/:id', requirePermission('boms', 'edit'), (req, res) => {
     const bom = db.prepare('SELECT * FROM boms WHERE id = ? AND is_active = 1').get(req.params.id);
     if (!bom) throw new NotFoundError('BOM');
 
-    const { name, outputMaterialId, outputQuantity, category, description, status, items = [], changeNotes } = req.body;
+    const { name, outputMaterialId, outputQuantity, category, description, status, items = [], changeNotes, bomLevel, displayVersion } = req.body;
 
     if (!name || !name.trim()) throw new ValidationError('BOM 名称不能为空');
     if (status && status !== 'active') {
@@ -814,6 +977,7 @@ router.put('/:id', requirePermission('boms', 'edit'), (req, res) => {
         }
     }
 
+    const naming = evaluateBomNaming({ name, bomLevel, displayVersion });
     const { fullPinyin, abbr } = generatePinyinFields(name.trim());
 
     const doUpdate = db.transaction(() => {
@@ -823,6 +987,8 @@ router.put('/:id', requirePermission('boms', 'edit'), (req, res) => {
             name: bom.name, code: bom.code, version: bom.version,
             outputMaterialId: bom.output_material_id, outputQuantity: bom.output_quantity,
             category: bom.category, description: bom.description,
+            bomLevel: bom.bom_level || null, displayVersion: bom.display_version || null,
+            namingStatus: bom.naming_status || 'warning', suggestedName: bom.suggested_name || null,
             items: currentItems
         });
 
@@ -844,10 +1010,13 @@ router.put('/:id', requirePermission('boms', 'edit'), (req, res) => {
         // 更新 BOM 主表
         db.prepare(`
             UPDATE boms SET name=?, output_material_id=?, output_quantity=?, category=?, description=?,
-                            status=?, version=?, name_pinyin=?, name_pinyin_abbr=?, updated_at=datetime('now','localtime')
+                            status=?, version=?, name_pinyin=?, name_pinyin_abbr=?, updated_at=datetime('now','localtime'),
+                            bom_level=?, display_version=?, naming_status=?, naming_issues_json=?, suggested_name=?, naming_checked_at=datetime('now','localtime')
             WHERE id = ?
         `).run(name.trim(), outputMaterialId || null, outputQuantity || 1, category || null, description || null,
-               status || 'active', newVersion, fullPinyin, abbr, bom.id);
+               status || 'active', newVersion, fullPinyin, abbr,
+               naming.bomLevel, naming.displayVersion, naming.namingStatus, JSON.stringify(naming.namingIssues), naming.suggestedName,
+               bom.id);
 
         // 重建 BOM 项
         db.prepare('DELETE FROM bom_items WHERE bom_id = ?').run(bom.id);
@@ -883,7 +1052,7 @@ router.put('/:id', requirePermission('boms', 'edit'), (req, res) => {
         resourceId: bom.id, detail: `更新 BOM: ${name} → v${newVersion}`, ip: req.ip
     });
 
-    res.json({ success: true, data: { version: newVersion } });
+    res.json({ success: true, data: { version: newVersion, naming } });
 });
 
 /**
@@ -929,14 +1098,24 @@ router.post('/:id/duplicate', requirePermission('boms', 'add'), (req, res) => {
     if (!src) throw new NotFoundError('BOM');
 
     const newName = `${src.name} (副本)`;
+    const naming = evaluateBomNaming({
+        name: newName,
+        bomLevel: src.bom_level || inferBomLevelFromName(src.name),
+        displayVersion: src.display_version || src.version
+    });
     const { fullPinyin, abbr } = generatePinyinFields(newName);
 
     const doDuplicate = db.transaction(() => {
         const code = generateBomCode(db);
         const result = db.prepare(`
-            INSERT INTO boms (name, code, output_material_id, output_quantity, category, description, status, name_pinyin, name_pinyin_abbr, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
-        `).run(newName, code, src.output_material_id, src.output_quantity, src.category, src.description, fullPinyin, abbr, req.session.user.id);
+            INSERT INTO boms (name, code, output_material_id, output_quantity, category, description, status, name_pinyin, name_pinyin_abbr, created_by,
+                              bom_level, display_version, naming_status, naming_issues_json, suggested_name, naming_checked_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))
+        `).run(
+            newName, code, src.output_material_id, src.output_quantity, src.category, src.description,
+            fullPinyin, abbr, req.session.user.id,
+            naming.bomLevel, naming.displayVersion, naming.namingStatus, JSON.stringify(naming.namingIssues), naming.suggestedName
+        );
 
         const newId = result.lastInsertRowid;
         const items = db.prepare('SELECT * FROM bom_items WHERE bom_id = ? ORDER BY sort_order').all(src.id);

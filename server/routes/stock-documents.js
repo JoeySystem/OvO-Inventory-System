@@ -82,6 +82,18 @@ router.get('/', ensureListViewPermission, (req, res) => {
         whereClauses.push('(sd.doc_no LIKE ? OR sd.reference_no LIKE ?)');
         params.push(`%${req.query.referenceNo}%`, `%${req.query.referenceNo}%`);
     }
+    if (req.query.originType) {
+        whereClauses.push('sd.origin_type = ?');
+        params.push(String(req.query.originType));
+    }
+    if (req.query.originId) {
+        whereClauses.push('sd.origin_id = ?');
+        params.push(Number(req.query.originId));
+    }
+    if (req.query.originNo) {
+        whereClauses.push('po.order_no LIKE ?');
+        params.push(`%${req.query.originNo}%`);
+    }
     if (req.query.start) { whereClauses.push("date(COALESCE(sd.submitted_at, sd.executed_at, sd.posted_at, sd.created_at)) >= date(?)"); params.push(req.query.start); }
     if (req.query.end) { whereClauses.push("date(COALESCE(sd.submitted_at, sd.executed_at, sd.posted_at, sd.created_at)) <= date(?)"); params.push(req.query.end); }
     if (req.query.materialId) {
@@ -103,6 +115,7 @@ router.get('/', ensureListViewPermission, (req, res) => {
             sd.*,
             w.name as warehouse_name,
             tw.name as to_warehouse_name,
+            po.order_no as origin_no,
             parent.doc_no as reversal_of_doc_no,
             child.doc_no as reversed_by_doc_no,
             COUNT(sdi.id) as item_count,
@@ -114,6 +127,7 @@ router.get('/', ensureListViewPermission, (req, res) => {
         FROM stock_documents sd
         LEFT JOIN warehouses w ON sd.warehouse_id = w.id
         LEFT JOIN warehouses tw ON sd.to_warehouse_id = tw.id
+        LEFT JOIN production_orders po ON sd.origin_type = 'production_order' AND sd.origin_id = po.id
         LEFT JOIN stock_documents parent ON sd.reversal_of_document_id = parent.id
         LEFT JOIN stock_documents child ON sd.reversed_by_document_id = child.id
         LEFT JOIN stock_document_items sdi ON sdi.document_id = sd.id
@@ -145,6 +159,9 @@ router.get('/', ensureListViewPermission, (req, res) => {
                 toWarehouseId: row.to_warehouse_id,
                 toWarehouseName: row.to_warehouse_name || '-',
                 counterparty: row.counterparty || null,
+                originType: row.origin_type || null,
+                originId: row.origin_id || null,
+                originNo: row.origin_no || null,
                 quantity: row.total_quantity,
                 totalAmount: row.total_amount,
                 itemCount: row.item_count,
