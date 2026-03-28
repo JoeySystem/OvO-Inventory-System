@@ -4,7 +4,7 @@ title OvO System Database Restore
 set "PROJECT_DIR=%~dp0.."
 set "BACKUP_DIR=%PROJECT_DIR%\backups"
 pushd "%PROJECT_DIR%"
-for /f "usebackq delims=" %%I in (`node -e "const p=require('./server/config/paths'); console.log(p.getDbPath())"`) do set "DB_FILE=%%I"
+for /f "usebackq delims=" %%I in (`node -e "const p=require('./server/config/paths'); console.log(p.getDbPath())"`) do set "DB_PATH=%%I"
 popd
 
 echo.
@@ -62,8 +62,8 @@ if /i not "%CONFIRM%"=="Y" (
 )
 
 :: Backup current database
-if exist "%DB_FILE%" (
-    copy "%DB_FILE%" "%BACKUP_DIR%\inventory_before_restore.db" >nul
+if exist "%DB_PATH%" (
+    copy "%DB_PATH%" "%BACKUP_DIR%\inventory_before_restore.db" >nul
     echo [OK] Current database backed up
 )
 
@@ -71,7 +71,7 @@ if exist "%DB_FILE%" (
 call "%~dp0stop.bat" >nul 2>&1
 
 :: Restore
-copy /Y "%RESTORE_FILE%" "%DB_FILE%" >nul
+copy /Y "%RESTORE_FILE%" "%DB_PATH%" >nul
 echo [OK] Database restored from: %BACKUP_NAME%
 echo.
 echo Please restart the service: start.bat

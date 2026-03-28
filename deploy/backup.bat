@@ -11,8 +11,8 @@ popd
 if not exist "%BACKUP_DIR%" mkdir "%BACKUP_DIR%"
 
 :: Check database file
-if not exist "%DB_FILE%" (
-    echo [X] Database file not found: %DB_FILE%
+if not exist "%DB_PATH%" (
+    echo [X] Database file not found: %DB_PATH%
     pause
     exit /b 1
 )
@@ -23,7 +23,7 @@ cd /d "%PROJECT_DIR%"
 node -e "const db=require('./server/db/database').getDB(); db.pragma('wal_checkpoint(TRUNCATE)'); console.log('[OK] WAL checkpoint done'); require('./server/db/database').closeDB();" 2>nul
 
 set "BACKUP_FILE=%BACKUP_DIR%\inventory_%TIMESTAMP%.db"
-copy "%DB_FILE%" "%BACKUP_FILE%" >nul
+copy "%DB_PATH%" "%BACKUP_FILE%" >nul
 
 if %errorlevel% equ 0 (
     echo.

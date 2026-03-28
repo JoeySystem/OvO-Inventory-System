@@ -87,12 +87,12 @@ if %errorlevel% neq 0 (
 )
 
 echo [5/5] Verifying configured database path...
-if not exist "%DB_FILE%" (
+if not exist "%DB_PATH%" (
     echo [!] Database file not found at configured path:
-    echo     %DB_FILE%
+    echo     %DB_PATH%
     echo [!] Update succeeded, but database initialization or migration may still be required.
 ) else (
-    echo [OK] Database path: %DB_FILE%
+    echo [OK] Database path: %DB_PATH%
 )
 
 echo Update complete

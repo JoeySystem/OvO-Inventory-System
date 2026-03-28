@@ -27,9 +27,11 @@ const runDir = path.join(ROOT_DIR, 'run');
 const values = {
     APP_PORT: String(port),
     APP_BASE_URL: baseUrl,
+    APP_URL: baseUrl,
     HEALTH_URL: `${baseUrl}/api/health`,
     PID_FILE: path.join(runDir, 'ovo-system.pid'),
     DB_PATH: getDbPath(),
+    DB_FILE: getDbPath(),
     DB_DIR: path.dirname(getDbPath()),
     TIMESTAMP: formatTimestamp(new Date())
 };

@@ -82,8 +82,8 @@ echo [1/7] Stopping running service...
 call "%~dp0stop.bat" <nul
 
 echo [2/7] Backing up current database before rollback...
-if exist "%DB_FILE%" (
-    copy "%DB_FILE%" "%BACKUP_DIR%\inventory_before_rollback_!TIMESTAMP!.db" >nul
+if exist "%DB_PATH%" (
+    copy "%DB_PATH%" "%BACKUP_DIR%\inventory_before_rollback_!TIMESTAMP!.db" >nul
     echo [OK] Current database backed up
 ) else (
     echo [!] Current database not found, skipping pre-rollback backup
@@ -116,7 +116,7 @@ if %errorlevel% neq 0 (
 
 echo [6/7] Restoring database backup...
 if not exist "%DB_DIR%" mkdir "%DB_DIR%"
-copy /Y "%RESTORE_FILE%" "%DB_FILE%" >nul
+copy /Y "%RESTORE_FILE%" "%DB_PATH%" >nul
 if %errorlevel% neq 0 (
     echo [X] Failed to restore database
     pause
@@ -143,9 +143,9 @@ if %errorlevel% equ 0 (
 timeout /t 4 /nobreak >nul
 
 powershell -NoProfile -Command ^
-  "try { $r = Invoke-WebRequest -UseBasicParsing '%APP_URL%' -TimeoutSec 5; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }"
+  "try { $r = Invoke-WebRequest -UseBasicParsing '%HEALTH_URL%' -TimeoutSec 5; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }"
 if %errorlevel% neq 0 (
-    echo [X] Health check failed after rollback: %APP_URL%
+    echo [X] Health check failed after rollback: %HEALTH_URL%
     echo [!] Please review the server window or logs.
     pause
     exit /b 1
@@ -154,7 +154,7 @@ if %errorlevel% neq 0 (
 for /f "tokens=*" %%i in ('git rev-parse --short HEAD') do set GIT_SHA=%%i
 echo [OK] Rollback finished successfully
 echo [OK] Current revision: %GIT_SHA%
-echo [OK] Health check passed: %APP_URL%
+echo [OK] Health check passed: %HEALTH_URL%
 echo.
 start "" "%APP_BASE_URL%"
 pause

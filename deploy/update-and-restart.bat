@@ -57,9 +57,9 @@ timeout /t 4 /nobreak >nul
 
 echo [5/6] Running health check...
 powershell -NoProfile -Command ^
-  "try { $r = Invoke-WebRequest -UseBasicParsing '%APP_URL%' -TimeoutSec 5; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }"
+  "try { $r = Invoke-WebRequest -UseBasicParsing '%HEALTH_URL%' -TimeoutSec 5; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }"
 if %errorlevel% neq 0 (
-    echo [X] Health check failed: %APP_URL%
+    echo [X] Health check failed: %HEALTH_URL%
     echo [!] Please review the server window or logs before continuing.
     pause
     exit /b 1
@@ -68,7 +68,7 @@ if %errorlevel% neq 0 (
 echo [6/6] Update finished successfully
 for /f "tokens=*" %%i in ('git rev-parse --short HEAD') do set GIT_SHA=%%i
 echo [OK] Current revision: %GIT_SHA%
-echo [OK] Health check passed: %APP_URL%
+echo [OK] Health check passed: %HEALTH_URL%
 echo.
 start "" "%APP_BASE_URL%"
 pause
