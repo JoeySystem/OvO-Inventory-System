@@ -216,9 +216,12 @@ router.put('/:id',
     requireDocumentPermission('edit', req => req.document.documentType),
     (req, res) => {
         const db = getDB();
-        const run = db.transaction(() => updateDocument(db, Number(req.params.id), req.body));
+        const run = db.transaction(() => updateDocument(db, Number(req.params.id), req.body, req.session.user.id));
         const document = run();
-        auditDocument(req, 'update', document, `更新单据 ${document.documentNo}`);
+        const detail = document.documentStatus === 'draft' && req.document.documentStatus === 'submitted'
+            ? `修改已提交单据 ${document.documentNo}，已退回草稿待重新提交`
+            : `更新单据 ${document.documentNo}`;
+        auditDocument(req, 'update', document, detail);
         res.json({ success: true, data: { document } });
     }
 );

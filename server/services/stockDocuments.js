@@ -89,7 +89,9 @@ function getDocConfig(docType) {
 }
 
 function buildExecutedAt() {
-    return new Date().toISOString().slice(0, 19).replace('T', ' ');
+    const now = new Date();
+    const pad = (value) => String(value).padStart(2, '0');
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
 }
 
 function generateExecutionDocNo(prefix) {
@@ -345,7 +347,73 @@ function getDocumentById(db, id) {
         WHERE sd.id = ?
     `).get(id);
     if (!row) throw new NotFoundError('单据');
-    return hydrateDocument(db, row);
+    const document = hydrateDocument(db, row);
+    const revisions = db.prepare(`
+        SELECT
+            sdr.*,
+            u.display_name AS edited_by_name,
+            u.username AS edited_by_username
+        FROM stock_document_revisions sdr
+        LEFT JOIN users u ON sdr.edited_by = u.id
+        WHERE sdr.document_id = ?
+        ORDER BY sdr.revision_no DESC, sdr.id DESC
+    `).all(id);
+    document.revisions = revisions.map((revision) => ({
+        id: revision.id,
+        revisionNo: revision.revision_no,
+        fromStatus: revision.from_status || null,
+        toStatus: revision.to_status || null,
+        editedBy: revision.edited_by || null,
+        editedByName: revision.edited_by_name || revision.edited_by_username || '-',
+        changeReason: revision.change_reason || '',
+        beforeSnapshot: revision.before_snapshot ? JSON.parse(revision.before_snapshot) : null,
+        afterSnapshot: revision.after_snapshot ? JSON.parse(revision.after_snapshot) : null,
+        createdAt: revision.created_at
+    }));
+    return document;
+}
+
+function getNextRevisionNo(db, documentId) {
+    const row = db.prepare(`
+        SELECT COALESCE(MAX(revision_no), 0) + 1 AS next_no
+        FROM stock_document_revisions
+        WHERE document_id = ?
+    `).get(documentId);
+    return Number(row?.next_no || 1);
+}
+
+function appendDocumentRevision(db, {
+    documentId,
+    fromStatus,
+    toStatus,
+    editedBy,
+    changeReason,
+    beforeSnapshot,
+    afterSnapshot
+}) {
+    db.prepare(`
+        INSERT INTO stock_document_revisions (
+            document_id,
+            revision_no,
+            from_status,
+            to_status,
+            edited_by,
+            change_reason,
+            before_snapshot,
+            after_snapshot,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+    `).run(
+        documentId,
+        getNextRevisionNo(db, documentId),
+        fromStatus || null,
+        toStatus || null,
+        editedBy || null,
+        changeReason || null,
+        JSON.stringify(beforeSnapshot || null),
+        JSON.stringify(afterSnapshot || null)
+    );
 }
 
 function getDocumentRow(db, id) {
@@ -422,9 +490,17 @@ function createDocument(db, payload, userId, targetStatus = 'draft') {
     return getDocumentById(db, result.lastInsertRowid);
 }
 
-function updateDocument(db, id, payload) {
+function updateDocument(db, id, payload, userId = null) {
     const current = getDocumentRow(db, id);
-    if (current.status !== 'draft') throw new ConflictError('只有草稿单据允许修改');
+    if (!['draft', 'submitted'].includes(current.status)) {
+        throw new ConflictError('只有草稿或已提交未执行单据允许修改');
+    }
+    const beforeDocument = getDocumentById(db, id);
+    const requiresResubmit = current.status === 'submitted';
+    const changeReason = payload.changeReason ? String(payload.changeReason).trim() : '';
+    if (requiresResubmit && !changeReason) {
+        throw new ValidationError('已提交单据修改时必须填写修改原因', 'changeReason');
+    }
 
     const docType = payload.docType || current.doc_type;
     const { config, warehouseId, toWarehouseId } = validateHeader(db, docType, {
@@ -439,7 +515,8 @@ function updateDocument(db, id, payload) {
     db.prepare(`
         UPDATE stock_documents
         SET doc_no = ?, doc_type = ?, biz_type = ?, source = ?, warehouse_id = ?, to_warehouse_id = ?,
-            counterparty = ?, reference_no = ?, notes = ?, updated_at = datetime('now', 'localtime')
+            counterparty = ?, reference_no = ?, notes = ?, status = ?,
+            submitted_at = ?, submitted_by = ?, status_reason = ?, updated_at = datetime('now', 'localtime')
         WHERE id = ?
     `).run(
         docNo,
@@ -451,11 +528,25 @@ function updateDocument(db, id, payload) {
         payload.counterparty !== undefined ? (payload.counterparty ? String(payload.counterparty).trim() : null) : current.counterparty,
         docNo,
         payload.notes !== undefined ? (payload.notes ? String(payload.notes).trim() : null) : current.notes,
+        requiresResubmit ? 'draft' : current.status,
+        requiresResubmit ? null : current.submitted_at,
+        requiresResubmit ? null : current.submitted_by,
+        requiresResubmit ? `edited_requires_resubmit:${changeReason}` : current.status_reason,
         id
     );
 
     replaceDocumentItems(db, id, items);
-    return getDocumentById(db, id);
+    const updatedDocument = getDocumentById(db, id);
+    appendDocumentRevision(db, {
+        documentId: id,
+        fromStatus: current.status,
+        toStatus: updatedDocument.documentStatus,
+        editedBy: userId || payload.updatedBy || null,
+        changeReason: requiresResubmit ? changeReason : (payload.changeReason ? String(payload.changeReason).trim() : '编辑草稿'),
+        beforeSnapshot: beforeDocument,
+        afterSnapshot: updatedDocument
+    });
+    return updatedDocument;
 }
 
 function submitDocument(db, id, userId) {

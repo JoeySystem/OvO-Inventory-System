@@ -15,6 +15,12 @@
 
 const { ValidationError } = require('../utils/errors');
 
+function buildLocalTimestamp() {
+    const now = new Date();
+    const pad = (value) => String(value).padStart(2, '0');
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+}
+
 function resolveMovementDocumentMeta(type, source, referenceNo, overrides = {}) {
     const metaBySource = {
         manual_in: {
@@ -66,7 +72,7 @@ function resolveMovementDocumentMeta(type, source, referenceNo, overrides = {}) 
         sourceDocType: overrides.sourceDocType || resolved.sourceDocType || 'stock_movement',
         sourceDocId: overrides.sourceDocId || null,
         sourceDocNo: referenceNo || null,
-        executedAt: overrides.executedAt || new Date().toISOString().slice(0, 19).replace('T', ' '),
+        executedAt: overrides.executedAt || buildLocalTimestamp(),
         sourceLabel: resolved.sourceLabel || source || type
     };
 }

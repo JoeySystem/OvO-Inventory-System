@@ -33,6 +33,7 @@ const sopRoutes = require('./routes/sops');
 const productionRoutes = require('./routes/production');
 const dataioRoutes = require('./routes/dataio');
 const bomRoutes = require('./routes/boms');
+const purchaseRecordRoutes = require('./routes/purchase-records');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -219,6 +220,7 @@ app.use('/api/sops', sopRoutes);
 app.use('/api/production', productionRoutes);
 app.use('/api/data', dataioRoutes);
 app.use('/api/boms', bomRoutes);
+app.use('/api/purchase-records', purchaseRecordRoutes);
 
 // ============================================
 // 健康检查

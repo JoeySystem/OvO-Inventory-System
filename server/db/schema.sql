@@ -216,6 +216,73 @@ CREATE INDEX IF NOT EXISTS idx_production_exception_governance_status
 CREATE INDEX IF NOT EXISTS idx_production_exception_governance_owner
     ON production_exception_governance(owner);
 
+CREATE TABLE IF NOT EXISTS purchase_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_date TEXT NOT NULL,
+    order_no TEXT NOT NULL UNIQUE,
+    supplier_name TEXT NOT NULL,
+    warehouse_name TEXT,
+    quantity REAL DEFAULT 0,
+    amount REAL DEFAULT 0,
+    paid_amount REAL DEFAULT 0,
+    unpaid_amount REAL DEFAULT 0,
+    source_file TEXT,
+    raw_source TEXT,
+    created_by INTEGER REFERENCES users(id),
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS purchase_record_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    record_id INTEGER NOT NULL REFERENCES purchase_records(id) ON DELETE CASCADE,
+    line_no INTEGER NOT NULL,
+    item_code TEXT,
+    item_name TEXT,
+    spec TEXT,
+    model TEXT,
+    brand TEXT,
+    unit TEXT,
+    quantity REAL DEFAULT 0,
+    unit_price REAL DEFAULT 0,
+    amount REAL DEFAULT 0,
+    note TEXT,
+    raw_source TEXT,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(record_id, line_no)
+);
+
+CREATE TABLE IF NOT EXISTS stock_document_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL REFERENCES stock_documents(id) ON DELETE CASCADE,
+    revision_no INTEGER NOT NULL,
+    from_status TEXT,
+    to_status TEXT,
+    edited_by INTEGER REFERENCES users(id),
+    change_reason TEXT,
+    before_snapshot TEXT,
+    after_snapshot TEXT,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(document_id, revision_no)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_document_revisions_document
+    ON stock_document_revisions(document_id);
+CREATE INDEX IF NOT EXISTS idx_stock_document_revisions_editor
+    ON stock_document_revisions(edited_by);
+
+CREATE INDEX IF NOT EXISTS idx_purchase_records_order_date
+    ON purchase_records(order_date);
+CREATE INDEX IF NOT EXISTS idx_purchase_records_supplier
+    ON purchase_records(supplier_name);
+CREATE INDEX IF NOT EXISTS idx_purchase_records_warehouse
+    ON purchase_records(warehouse_name);
+CREATE INDEX IF NOT EXISTS idx_purchase_record_items_record
+    ON purchase_record_items(record_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_record_items_code
+    ON purchase_record_items(item_code);
+
 -- ============================================
 -- 仓库
 -- ============================================

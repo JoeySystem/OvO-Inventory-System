@@ -614,6 +614,24 @@
     const { createApp, ref, computed, onMounted, onBeforeUnmount, watch, nextTick, provide, inject } = Vue;
     const { createRouter, createWebHistory } = VueRouter;
 
+    function formatLocalDateTime(value, fallback = '-') {
+        if (value === undefined || value === null || value === '') return fallback;
+        const formatDateObject = (date) => {
+            if (!(date instanceof Date) || Number.isNaN(date.getTime())) return fallback;
+            const pad = (part) => String(part).padStart(2, '0');
+            return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+        };
+        if (value instanceof Date) return formatDateObject(value);
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            if (!trimmed) return fallback;
+            if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+            if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(trimmed)) return trimmed;
+            return formatDateObject(new Date(trimmed));
+        }
+        return String(value);
+    }
+
     // ============================================
     // API 工具函数
     // ============================================
@@ -1042,7 +1060,7 @@
                             <div class="w-2 h-2 rounded-full bg-indigo-400 mt-1.5 shrink-0"></div>
                             <div class="flex-1 min-w-0">
                                 <p class="text-sm text-gray-700 truncate">{{ log.detail || log.action }}</p>
-                                <p class="text-xs text-gray-400">{{ log.user_name }} · {{ log.created_at }}</p>
+                                <p class="text-xs text-gray-400">{{ log.user_name }} · {{ $formatDateTime(log.created_at) }}</p>
                             </div>
                         </div>
                         <div v-if="recentLogs.length === 0" class="text-center py-4 text-gray-400 text-sm">暂无操作记录</div>
@@ -2189,8 +2207,8 @@
                         </select>
                         <input v-model.trim="filters.counterparty" type="text" :placeholder="'搜索' + config.counterpartyLabel" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500">
                         <input v-model.trim="filters.referenceNo" type="text" placeholder="搜索关联单号" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500">
-                        <input v-model="filters.start" type="date" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500">
-                        <input v-model="filters.end" type="date" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500">
+                        <input v-model="filters.start" @change="applyFilters" type="date" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500">
+                        <input v-model="filters.end" @change="applyFilters" type="date" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500">
                     </div>
                     <div class="flex gap-2">
                         <button type="button" @click="applyFilters" class="bg-gray-900 hover:bg-gray-800 text-white text-sm px-4 py-2 rounded-lg transition">筛选</button>
@@ -2213,7 +2231,7 @@
                             </thead>
                             <tbody class="divide-y divide-gray-100">
                                 <tr v-for="item in movementItems" :key="item.id" class="hover:bg-gray-50">
-                                    <td class="px-3 py-2 text-xs text-gray-400">{{ item.created_at }}</td>
+                                    <td class="px-3 py-2 text-xs text-gray-400">{{ $formatDateTime(item.created_at) }}</td>
                                     <td class="px-3 py-2 text-xs">
                                         <span class="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">{{ config.sourceLabel }}</span>
                                     </td>
@@ -2261,7 +2279,7 @@
                                     <td class="px-3 py-2 text-sm text-gray-500">{{ doc.warehouseName }}</td>
                                     <td class="px-3 py-2 text-sm text-right font-medium">{{ doc.quantity }} {{ doc.unit || '' }}</td>
                                     <td class="px-3 py-2 text-sm text-gray-500">{{ doc.counterparty || '-' }}</td>
-                                    <td class="px-3 py-2 text-xs text-gray-400">{{ doc.executedAt }}</td>
+                                    <td class="px-3 py-2 text-xs text-gray-400">{{ $formatDateTime(doc.executedAt) }}</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -2278,7 +2296,7 @@
                                 <div class="text-xs text-violet-500 mt-1">已形成单据头 + 单据明细 + 关联流水的轻量结构</div>
                             </div>
                             <div class="flex gap-2">
-                                <button v-if="selectedDocument.documentStatus === 'draft'" type="button" @click="editDraftDocument(selectedDocument)" class="text-xs px-2.5 py-1 rounded-lg bg-white border border-violet-200 text-violet-700 hover:bg-violet-100 transition">编辑草稿</button>
+                                <button v-if="['draft', 'submitted'].includes(selectedDocument.documentStatus)" type="button" @click="editDraftDocument(selectedDocument)" class="text-xs px-2.5 py-1 rounded-lg bg-white border border-violet-200 text-violet-700 hover:bg-violet-100 transition">{{ selectedDocument.documentStatus === 'draft' ? '编辑草稿' : '编辑已提交' }}</button>
                                 <button v-if="selectedDocument.documentStatus === 'draft'" type="button" @click="changeDocumentStatus(selectedDocument, 'submit')" class="text-xs px-2.5 py-1 rounded-lg bg-white border border-violet-200 text-violet-700 hover:bg-violet-100 transition">提交</button>
                                 <button v-if="selectedDocument.documentStatus === 'draft'" type="button" @click="changeDocumentStatus(selectedDocument, 'discard')" class="text-xs px-2.5 py-1 rounded-lg bg-white border border-rose-200 text-rose-700 hover:bg-rose-100 transition">撤销草稿</button>
                                 <button v-if="selectedDocument.documentStatus === 'submitted'" type="button" @click="changeDocumentStatus(selectedDocument, 'execute')" class="text-xs px-2.5 py-1 rounded-lg bg-white border border-violet-200 text-violet-700 hover:bg-violet-100 transition">执行</button>
@@ -2343,7 +2361,7 @@
                                     </thead>
                                     <tbody class="divide-y divide-violet-50">
                                         <tr v-for="movement in selectedDocument.movements" :key="movement.id">
-                                            <td class="px-3 py-2 text-xs text-gray-400">{{ movement.executedAt }}</td>
+                                            <td class="px-3 py-2 text-xs text-gray-400">{{ $formatDateTime(movement.executedAt) }}</td>
                                             <td class="px-3 py-2 text-xs text-gray-500">{{ movement.sourceLabel }}</td>
                                             <td class="px-3 py-2 text-sm text-gray-800">{{ movement.materialName }}</td>
                                             <td class="px-3 py-2 text-sm text-gray-500">{{ movement.warehouseName }}</td>
@@ -2374,6 +2392,7 @@
                 const lastSubmittedDoc = ref(null);
                 const selectedMaterialSuppliers = ref([]);
                 const editingDocumentId = ref(null);
+                const editingDocumentStatus = ref(null);
                 const selectedDocument = ref(null);
                 const viewMode = ref('movements');
                 const movementItems = ref([]);
@@ -2705,8 +2724,22 @@
                         let result;
                         if (editingDocumentId.value) {
                             const draftId = editingDocumentId.value;
-                            result = await api.put('/api/stock-documents/' + draftId, buildDocumentPayload());
-                            if (mode === 'submit') {
+                            const isSubmittedEdit = editingDocumentStatus.value === 'submitted';
+                            let changeReason = '';
+                            if (isSubmittedEdit) {
+                                const reason = window.prompt('该单据已提交。修改后会退回草稿并要求重新提交，请填写修改原因：');
+                                if (reason === null) {
+                                    submitting.value = false;
+                                    return;
+                                }
+                                changeReason = String(reason || '').trim();
+                                if (!changeReason) throw new Error('修改原因不能为空');
+                            }
+                            result = await api.put('/api/stock-documents/' + draftId, {
+                                ...buildDocumentPayload(),
+                                changeReason
+                            });
+                            if (mode === 'submit' && !isSubmittedEdit) {
                                 result = await api.post(`/api/stock-documents/${draftId}/submit`);
                                 if (autoProcess) {
                                     result = await finalizeDocumentLifecycle(draftId);
@@ -2721,15 +2754,18 @@
                         lastSubmittedDoc.value = result.document || null;
                         showToast(
                             editingDocumentId.value
-                                ? (mode === 'submit'
+                                ? (editingDocumentStatus.value === 'submitted'
+                                    ? '已提交单据已更新并退回草稿，请重新提交确认'
+                                    : (mode === 'submit'
                                     ? (autoProcess ? '草稿已更新并执行记账' : '草稿已更新并提交')
-                                    : '草稿已更新')
+                                    : '草稿已更新'))
                                 : (mode === 'submit'
                                     ? (autoProcess ? '单据已提交并执行记账' : '单据已提交，等待执行')
                                     : '草稿已保存'),
                             'success'
                         );
                         editingDocumentId.value = null;
+                        editingDocumentStatus.value = null;
                         resetForm();
                         await refreshSnapshot();
                         await Promise.all([
@@ -2799,6 +2835,7 @@
 
                 function resetForm() {
                     editingDocumentId.value = null;
+                    editingDocumentStatus.value = null;
                     selectedMaterialSuppliers.value = [];
                     form.value = {
                         warehouseId: '',
@@ -2842,8 +2879,9 @@
                 }
 
                 function editDraftDocument(document) {
-                    if (!document || document.documentStatus !== 'draft') return;
+                    if (!document || !['draft', 'submitted'].includes(document.documentStatus)) return;
                     editingDocumentId.value = document.id;
+                    editingDocumentStatus.value = document.documentStatus;
                     selectedMaterialSuppliers.value = [];
                     form.value = {
                         warehouseId: document.warehouseId ? String(document.warehouseId) : '',
@@ -2958,10 +2996,11 @@
                     return link;
                 }
 
-                function applyRoutePrefill() {
+                async function applyRoutePrefill() {
                     const params = new URLSearchParams(window.location.search);
                     const warehouseId = params.get('warehouseId');
                     const materialId = params.get('materialId');
+                    const editDraftId = params.get('editDraftId');
                     if (warehouseId) {
                         form.value.warehouseId = warehouseId;
                         filters.value.warehouseId = warehouseId;
@@ -2969,6 +3008,18 @@
                     if (materialId) {
                         form.value.materialId = materialId;
                         filters.value.materialId = materialId;
+                    }
+                    if (editDraftId) {
+                        try {
+                            const data = await api.get('/api/stock-documents/' + editDraftId);
+                            if (['draft', 'submitted'].includes(data.document?.documentStatus)) {
+                                editDraftDocument(data.document);
+                                selectedDocument.value = data.document;
+                            }
+                        } catch (e) {
+                            console.error(e);
+                            formError.value = e.message || '加载草稿失败';
+                        }
                     }
                 }
 
@@ -2984,7 +3035,7 @@
                 });
                 onMounted(async () => {
                     await loadOptions();
-                    applyRoutePrefill();
+                    await applyRoutePrefill();
                     await loadMaterialCounterpartyOptions();
                     await refreshSnapshot();
                     if (filters.value.warehouseId || filters.value.materialId) {
@@ -3238,7 +3289,7 @@
                         </thead>
                         <tbody class="divide-y divide-gray-100">
                                 <tr v-for="item in movementItems" :key="item.id" class="hover:bg-gray-50">
-                                    <td class="px-3 py-2 text-xs text-gray-400">{{ item.created_at }}</td>
+                                    <td class="px-3 py-2 text-xs text-gray-400">{{ $formatDateTime(item.created_at) }}</td>
                                     <td class="px-3 py-2 text-xs">
                                         <span class="inline-flex items-center px-2 py-0.5 rounded-full bg-cyan-50 text-cyan-700">仓间调拨</span>
                                     </td>
@@ -3301,7 +3352,7 @@
                     <div class="flex items-center justify-between gap-3">
                         <div class="text-sm font-semibold text-cyan-800">当前选中轻量调拨单据</div>
                         <div class="flex gap-2">
-                            <button v-if="selectedDocument.documentStatus === 'draft'" type="button" @click="editDraftDocument(selectedDocument)" class="text-xs px-2.5 py-1 rounded-lg bg-white border border-cyan-200 text-cyan-700 hover:bg-cyan-100 transition">编辑草稿</button>
+                            <button v-if="['draft', 'submitted'].includes(selectedDocument.documentStatus)" type="button" @click="editDraftDocument(selectedDocument)" class="text-xs px-2.5 py-1 rounded-lg bg-white border border-cyan-200 text-cyan-700 hover:bg-cyan-100 transition">{{ selectedDocument.documentStatus === 'draft' ? '编辑草稿' : '编辑已提交' }}</button>
                             <button v-if="selectedDocument.documentStatus === 'draft'" type="button" @click="changeDocumentStatus(selectedDocument, 'submit')" class="text-xs px-2.5 py-1 rounded-lg bg-white border border-cyan-200 text-cyan-700 hover:bg-cyan-100 transition">提交</button>
                             <button v-if="selectedDocument.documentStatus === 'draft'" type="button" @click="changeDocumentStatus(selectedDocument, 'discard')" class="text-xs px-2.5 py-1 rounded-lg bg-white border border-rose-200 text-rose-700 hover:bg-rose-100 transition">撤销草稿</button>
                             <button v-if="selectedDocument.documentStatus === 'submitted'" type="button" @click="changeDocumentStatus(selectedDocument, 'execute')" class="text-xs px-2.5 py-1 rounded-lg bg-white border border-cyan-200 text-cyan-700 hover:bg-cyan-100 transition">执行</button>
@@ -3363,7 +3414,7 @@
                                 </thead>
                                 <tbody class="divide-y divide-cyan-50">
                                     <tr v-for="movement in selectedDocument.movements" :key="movement.id">
-                                        <td class="px-3 py-2 text-xs text-gray-400">{{ movement.executedAt }}</td>
+                                        <td class="px-3 py-2 text-xs text-gray-400">{{ $formatDateTime(movement.executedAt) }}</td>
                                         <td class="px-3 py-2 text-xs text-gray-500">{{ movement.sourceLabel }}</td>
                                         <td class="px-3 py-2 text-sm text-gray-800">{{ movement.materialName }}</td>
                                         <td class="px-3 py-2 text-sm text-gray-500">{{ movement.warehouseName }}</td>
@@ -3386,6 +3437,7 @@
             const stockSnapshot = ref(null);
             const lastSubmittedDoc = ref(null);
             const editingDocumentId = ref(null);
+            const editingDocumentStatus = ref(null);
             const selectedDocument = ref(null);
             const viewMode = ref('movements');
             const movementItems = ref([]);
@@ -3563,8 +3615,22 @@
                     let result;
                     if (editingDocumentId.value) {
                         const draftId = editingDocumentId.value;
-                        result = await api.put('/api/stock-documents/' + draftId, buildDocumentPayload());
-                        if (mode === 'submit') {
+                        const isSubmittedEdit = editingDocumentStatus.value === 'submitted';
+                        let changeReason = '';
+                        if (isSubmittedEdit) {
+                            const reason = window.prompt('该单据已提交。修改后会退回草稿并要求重新提交，请填写修改原因：');
+                            if (reason === null) {
+                                submitting.value = false;
+                                return;
+                            }
+                            changeReason = String(reason || '').trim();
+                            if (!changeReason) throw new Error('修改原因不能为空');
+                        }
+                        result = await api.put('/api/stock-documents/' + draftId, {
+                            ...buildDocumentPayload(),
+                            changeReason
+                        });
+                        if (mode === 'submit' && !isSubmittedEdit) {
                             result = await api.post(`/api/stock-documents/${draftId}/submit`);
                             if (autoProcess) {
                                 result = await finalizeDocumentLifecycle(draftId);
@@ -3577,17 +3643,20 @@
                         }
                     }
                     lastSubmittedDoc.value = result.document || null;
-                    showToast(
-                        editingDocumentId.value
-                            ? (mode === 'submit'
+                        showToast(
+                            editingDocumentId.value
+                                ? (editingDocumentStatus.value === 'submitted'
+                                    ? '已提交调拨单已更新并退回草稿，请重新提交确认'
+                                    : (mode === 'submit'
                                 ? (autoProcess ? '调拨草稿已更新并执行记账' : '调拨草稿已更新并提交')
-                                : '调拨草稿已更新')
+                                : '调拨草稿已更新'))
                             : (mode === 'submit'
                                 ? (autoProcess ? '调拨单已提交并执行记账' : '调拨单已提交，等待执行')
                                 : '调拨草稿已保存'),
                         'success'
                     );
                     editingDocumentId.value = null;
+                    editingDocumentStatus.value = null;
                     resetForm();
                     await Promise.all([loadMovements(1), loadDocuments(1, result.document?.id || '')]);
                 } catch (e) {
@@ -3645,6 +3714,7 @@
 
             function resetForm() {
                 editingDocumentId.value = null;
+                editingDocumentStatus.value = null;
                 form.value = { materialId: '', fromWarehouseId: '', toWarehouseId: '', quantity: 1, referenceNo: '', notes: '' };
                 stockSnapshot.value = null;
                 formError.value = '';
@@ -3671,8 +3741,9 @@
             function setViewMode(mode) { viewMode.value = mode; }
             function selectDocument(document) { loadDocumentDetail(document?.id); }
             function editDraftDocument(document) {
-                if (!document || document.documentStatus !== 'draft') return;
+                if (!document || !['draft', 'submitted'].includes(document.documentStatus)) return;
                 editingDocumentId.value = document.id;
+                editingDocumentStatus.value = document.documentStatus;
                 form.value = {
                     materialId: document.items?.[0]?.materialId ? String(document.items[0].materialId) : '',
                     fromWarehouseId: document.warehouseId ? String(document.warehouseId) : '',
@@ -3990,7 +4061,7 @@
                         </thead>
                         <tbody class="divide-y divide-gray-100">
                                 <tr v-for="item in movementItems" :key="item.id" class="hover:bg-gray-50">
-                                    <td class="px-3 py-2 text-xs text-gray-400">{{ item.created_at }}</td>
+                                    <td class="px-3 py-2 text-xs text-gray-400">{{ $formatDateTime(item.created_at) }}</td>
                                     <td class="px-3 py-2 text-xs">
                                         <span class="inline-flex items-center px-2 py-0.5 rounded-full bg-rose-50 text-rose-700">盘点调整</span>
                                     </td>
@@ -4032,7 +4103,7 @@
                                 <td class="px-3 py-2 text-sm text-gray-800">{{ doc.materialName }}</td>
                                 <td class="px-3 py-2 text-sm text-gray-500">{{ doc.warehouseName }}</td>
                                 <td class="px-3 py-2 text-sm text-right font-medium" :class="doc.delta > 0 ? 'text-emerald-600' : (doc.delta < 0 ? 'text-rose-600' : 'text-gray-800')">{{ doc.delta > 0 ? '+' : '' }}{{ doc.delta }}</td>
-                                <td class="px-3 py-2 text-xs text-gray-400">{{ doc.executedAt }}</td>
+                                <td class="px-3 py-2 text-xs text-gray-400">{{ $formatDateTime(doc.executedAt) }}</td>
                             </tr>
                         </tbody>
                     </table>
@@ -4053,7 +4124,7 @@
                     <div class="flex items-center justify-between gap-3">
                         <div class="text-sm font-semibold text-rose-800">当前选中轻量盘点单据</div>
                         <div class="flex gap-2">
-                            <button v-if="selectedDocument.documentStatus === 'draft'" type="button" @click="editDraftDocument(selectedDocument)" class="text-xs px-2.5 py-1 rounded-lg bg-white border border-rose-200 text-rose-700 hover:bg-rose-100 transition">编辑草稿</button>
+                            <button v-if="['draft', 'submitted'].includes(selectedDocument.documentStatus)" type="button" @click="editDraftDocument(selectedDocument)" class="text-xs px-2.5 py-1 rounded-lg bg-white border border-rose-200 text-rose-700 hover:bg-rose-100 transition">{{ selectedDocument.documentStatus === 'draft' ? '编辑草稿' : '编辑已提交' }}</button>
                             <button v-if="selectedDocument.documentStatus === 'draft'" type="button" @click="changeDocumentStatus(selectedDocument, 'submit')" class="text-xs px-2.5 py-1 rounded-lg bg-white border border-rose-200 text-rose-700 hover:bg-rose-100 transition">提交</button>
                             <button v-if="selectedDocument.documentStatus === 'draft'" type="button" @click="changeDocumentStatus(selectedDocument, 'discard')" class="text-xs px-2.5 py-1 rounded-lg bg-white border border-rose-200 text-rose-700 hover:bg-rose-100 transition">撤销草稿</button>
                             <button v-if="selectedDocument.documentStatus === 'submitted'" type="button" @click="changeDocumentStatus(selectedDocument, 'execute')" class="text-xs px-2.5 py-1 rounded-lg bg-white border border-rose-200 text-rose-700 hover:bg-rose-100 transition">执行</button>
@@ -4072,7 +4143,7 @@
                         <div class="rounded-lg bg-white border border-rose-100 px-3 py-2"><span class="text-rose-500 text-xs block">仓库</span><span class="text-rose-800">{{ selectedDocument.warehouseName }}</span></div>
                         <div class="rounded-lg bg-white border border-rose-100 px-3 py-2"><span class="text-rose-500 text-xs block">物料</span><span class="text-rose-800">{{ selectedDocument.materialName }}</span></div>
                         <div class="rounded-lg bg-white border border-rose-100 px-3 py-2"><span class="text-rose-500 text-xs block">调整差值</span><span class="text-rose-800">{{ selectedDocument.delta }}</span></div>
-                        <div class="rounded-lg bg-white border border-rose-100 px-3 py-2"><span class="text-rose-500 text-xs block">执行时间</span><span class="text-rose-800">{{ selectedDocument.executedAt }}</span></div>
+                        <div class="rounded-lg bg-white border border-rose-100 px-3 py-2"><span class="text-rose-500 text-xs block">执行时间</span><span class="text-rose-800">{{ $formatDateTime(selectedDocument.executedAt) }}</span></div>
                     </div>
                     <div v-if="selectedDocument.items?.length" class="mt-4 rounded-xl bg-white border border-rose-100 overflow-hidden">
                         <div class="px-4 py-3 border-b border-rose-100 text-sm font-medium text-rose-800">单据明细</div>
@@ -4114,7 +4185,7 @@
                                 </thead>
                                 <tbody class="divide-y divide-rose-50">
                                     <tr v-for="movement in selectedDocument.movements" :key="movement.id">
-                                        <td class="px-3 py-2 text-xs text-gray-400">{{ movement.executedAt }}</td>
+                                        <td class="px-3 py-2 text-xs text-gray-400">{{ $formatDateTime(movement.executedAt) }}</td>
                                         <td class="px-3 py-2 text-xs text-gray-500">{{ movement.sourceLabel }}</td>
                                         <td class="px-3 py-2 text-sm text-gray-800">{{ movement.materialName }}</td>
                                         <td class="px-3 py-2 text-sm text-gray-500">{{ movement.warehouseName }}</td>
@@ -4136,6 +4207,7 @@
             const stockSnapshot = ref(null);
             const lastSubmittedDoc = ref(null);
             const editingDocumentId = ref(null);
+            const editingDocumentStatus = ref(null);
             const selectedDocument = ref(null);
             const viewMode = ref('movements');
             const movementItems = ref([]);
@@ -4316,8 +4388,22 @@
                     let result;
                     if (editingDocumentId.value) {
                         const draftId = editingDocumentId.value;
-                        result = await api.put('/api/stock-documents/' + draftId, buildDocumentPayload());
-                        if (mode === 'submit') {
+                        const isSubmittedEdit = editingDocumentStatus.value === 'submitted';
+                        let changeReason = '';
+                        if (isSubmittedEdit) {
+                            const reason = window.prompt('该单据已提交。修改后会退回草稿并要求重新提交，请填写修改原因：');
+                            if (reason === null) {
+                                submitting.value = false;
+                                return;
+                            }
+                            changeReason = String(reason || '').trim();
+                            if (!changeReason) throw new Error('修改原因不能为空');
+                        }
+                        result = await api.put('/api/stock-documents/' + draftId, {
+                            ...buildDocumentPayload(),
+                            changeReason
+                        });
+                        if (mode === 'submit' && !isSubmittedEdit) {
                             result = await api.post(`/api/stock-documents/${draftId}/submit`);
                             if (autoProcess) {
                                 result = await finalizeDocumentLifecycle(draftId);
@@ -4330,17 +4416,20 @@
                         }
                     }
                     lastSubmittedDoc.value = result.document || null;
-                    showToast(
-                        editingDocumentId.value
-                            ? (mode === 'submit'
+                        showToast(
+                            editingDocumentId.value
+                                ? (editingDocumentStatus.value === 'submitted'
+                                    ? '已提交盘点单已更新并退回草稿，请重新提交确认'
+                                    : (mode === 'submit'
                                 ? (autoProcess ? '盘点草稿已更新并执行记账' : '盘点草稿已更新并提交')
-                                : '盘点草稿已更新')
+                                : '盘点草稿已更新'))
                             : (mode === 'submit'
                                 ? (autoProcess ? '盘点单已提交并执行记账' : '盘点单已提交，等待执行')
                                 : '盘点草稿已保存'),
                         'success'
                     );
                     editingDocumentId.value = null;
+                    editingDocumentStatus.value = null;
                     resetForm();
                     await refreshSnapshot();
                     await Promise.all([loadMovements(1), loadDocuments(1, result.document?.id || '')]);
@@ -4399,6 +4488,7 @@
 
             function resetForm() {
                 editingDocumentId.value = null;
+                editingDocumentStatus.value = null;
                 form.value = { warehouseId: '', materialId: '', actualQuantity: 0, referenceNo: '', notes: '' };
                 stockSnapshot.value = null;
                 formError.value = '';
@@ -4425,8 +4515,9 @@
             function setViewMode(mode) { viewMode.value = mode; }
             function selectDocument(document) { loadDocumentDetail(document?.id); }
             function editDraftDocument(document) {
-                if (!document || document.documentStatus !== 'draft') return;
+                if (!document || !['draft', 'submitted'].includes(document.documentStatus)) return;
                 editingDocumentId.value = document.id;
+                editingDocumentStatus.value = document.documentStatus;
                 form.value = {
                     warehouseId: document.warehouseId ? String(document.warehouseId) : '',
                     materialId: document.items?.[0]?.materialId ? String(document.items[0].materialId) : '',
@@ -4525,13 +4616,11 @@
                 printWindow.print();
             }
 
-            filters.value = createDefaultFilters();
-            watch(() => [form.value.warehouseId, form.value.materialId], refreshSnapshot);
-            onMounted(async () => {
-                await loadOptions();
+            async function applyRoutePrefill() {
                 const params = new URLSearchParams(window.location.search);
                 const warehouseId = params.get('warehouseId');
                 const materialId = params.get('materialId');
+                const editDraftId = params.get('editDraftId');
                 if (warehouseId) {
                     form.value.warehouseId = warehouseId;
                     filters.value.warehouseId = warehouseId;
@@ -4540,6 +4629,25 @@
                     form.value.materialId = materialId;
                     filters.value.materialId = materialId;
                 }
+                if (editDraftId) {
+                    try {
+                        const data = await api.get('/api/stock-documents/' + editDraftId);
+                        if (['draft', 'submitted'].includes(data.document?.documentStatus)) {
+                            editDraftDocument(data.document);
+                            selectedDocument.value = data.document;
+                        }
+                    } catch (e) {
+                        console.error(e);
+                        formError.value = e.message || '加载草稿失败';
+                    }
+                }
+            }
+
+            filters.value = createDefaultFilters();
+            watch(() => [form.value.warehouseId, form.value.materialId], refreshSnapshot);
+            onMounted(async () => {
+                await loadOptions();
+                await applyRoutePrefill();
                 await refreshSnapshot();
                 if (filters.value.warehouseId || filters.value.materialId) {
                     await Promise.all([loadMovements(1), loadDocuments(1)]);
@@ -4566,6 +4674,7 @@
         ],
         plannedDocs: [
             { name: '采购收货单', description: '已提供独立查询页；录入动作仍统一由“收货入库执行”页承接。', stage: '当前可用' },
+            { name: '历史采购记录', description: '支持导入管家婆采购单据查询汇总表，仅用于历史查询和供应商/金额追溯。', stage: '当前可用' },
             { name: '完工入库单', description: '已提供生产模块独立查询页，仍由工单完工流程自动生成。', stage: '当前可用' },
             { name: '退料回库单', description: '已提供生产模块独立查询页，仍由工单退料/取消流程自动生成。', stage: '当前可用' }
         ],
@@ -4576,12 +4685,14 @@
                 cards: [
                     { path: '/receive-execute', label: '收货与入库', tagline: '独立执行页', icon: 'package-plus', permission: 'receive', stage: '当前可用', description: '用于录入收货与回库类动作，并可直接生成和查询对应单据。' },
                     { path: '/purchase-receipts', label: '采购收货单', tagline: '独立查询页', icon: 'clipboard-list', permission: 'receive', stage: '当前可用', description: '独立查询采购收货、手工入库和回库类单据，不再只依赖收货执行页。' },
+                    { path: '/historical-purchase-records', label: '历史采购记录', tagline: '历史查询页', icon: 'history', permission: 'receive', stage: '当前可用', description: '导入外部历史采购单据查询表，查询供应商、仓库、金额与付款信息，不参与当前库存核算。' },
                     { path: '/production', label: '完工与退料', tagline: '生产工单内查看', icon: 'factory', permission: 'production', stage: '已实现但非独立入口', description: '完工入库和退料回库单据当前在生产工单流程中生成，并在工单详情内查看。' }
                 ]
             }
         ],
         notes: [
             '收模块当前已可录入和查询收货单据。',
+            '历史采购记录为独立历史查询台账，不参与当前库存与正式单据状态流转。',
             '采购收货、完工入库、退料回库的业务已实现，但入口仍有统一页和工单流程并存。'
         ]
     });
@@ -4952,8 +5063,18 @@
 	                                    <span v-if="m.is_low_stock" class="ml-1 text-red-500 text-xs">⚠</span>
 	                                    <span v-if="m.is_negative_stock" class="ml-1 text-rose-500 text-xs">负</span>
 	                                </td>
-                                <td class="px-4 py-3 text-sm text-right text-gray-600">{{ m.cost_price > 0 ? '¥' + m.cost_price.toFixed(2) : '-' }}</td>
-                                <td class="px-4 py-3 text-sm text-right text-gray-600">{{ m.sale_price > 0 ? '¥' + m.sale_price.toFixed(2) : '-' }}</td>
+                                <td class="px-4 py-3 text-right">
+                                    <div class="inline-flex min-w-[92px] flex-col items-end rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+                                        <span class="text-[11px] font-medium text-amber-700">成本价</span>
+                                        <span class="text-sm font-semibold text-amber-900">{{ m.cost_price > 0 ? '¥' + m.cost_price.toFixed(2) : '-' }}</span>
+                                    </div>
+                                </td>
+                                <td class="px-4 py-3 text-right">
+                                    <div class="inline-flex min-w-[92px] flex-col items-end rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
+                                        <span class="text-[11px] font-medium text-emerald-700">售价</span>
+                                        <span class="text-sm font-semibold text-emerald-900">{{ m.sale_price > 0 ? '¥' + m.sale_price.toFixed(2) : '-' }}</span>
+                                    </div>
+                                </td>
 	                                <td class="px-4 py-3 text-right">
 	                                    <div class="flex items-center justify-end gap-1">
 	                                        <button @click.stop="openDetailModal(m)" class="text-slate-600 hover:text-slate-800 text-xs px-2 py-1 rounded hover:bg-slate-50">详情</button>
@@ -5089,9 +5210,17 @@
 	                                <p class="mt-1 text-[11px] text-gray-400">对唯一供应商、长交期物料可提前触发供应风险预警。</p>
 	                            </div>
 	                            <div>
-	                                <label class="block text-sm font-medium text-gray-700 mb-1">供应商</label>
-	                                <input v-model="form.supplier" type="text" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+	                                <label class="block text-sm font-medium text-gray-700 mb-1">默认供应商</label>
+	                                <input v-model="form.supplier" type="text" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="例如：宁波博杰 / 淘宝店铺名">
+	                                <p class="mt-1 text-[11px] text-gray-400">首次建料时可先填一个默认供应商，保存后会自动形成默认供应商记录。</p>
                             </div>
+	                            <div>
+	                                <label class="block text-sm font-medium text-gray-700 mb-1">来源平台</label>
+	                                <select v-model="form.defaultSupplierSourcePlatform" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+	                                    <option v-for="option in supplierSourcePlatformOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+	                                </select>
+	                                <p class="mt-1 text-[11px] text-gray-400">用于收货入库时优先带出来源。后续仍可在物料详情里维护更多供应商。</p>
+	                            </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">尺寸</label>
                                 <input v-model="form.dimensions" type="text" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="如 240*143*42mm">
@@ -5340,6 +5469,47 @@
 
 	                    <div v-else-if="detailData" class="space-y-6">
 	                        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+	                            <div class="bg-white rounded-xl p-4 border border-sky-200 lg:col-span-3">
+	                                <div class="flex items-center justify-between gap-3 mb-3">
+	                                    <div class="text-sm font-semibold text-gray-800">价格信息</div>
+	                                    <span class="text-xs text-gray-400">先看这组价格，再决定是否查看供应商报价明细</span>
+	                                </div>
+	                                <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+	                                    <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+	                                        <div class="text-xs font-medium text-amber-700">成本价</div>
+	                                        <div class="mt-2 text-2xl font-semibold text-amber-900">{{ detailData.material.cost_price > 0 ? '¥' + Number(detailData.material.cost_price || 0).toFixed(2) : '-' }}</div>
+	                                        <div class="mt-1 text-[11px] text-amber-700">物料主档当前成本参考价</div>
+	                                    </div>
+	                                    <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+	                                        <div class="text-xs font-medium text-emerald-700">售价</div>
+	                                        <div class="mt-2 text-2xl font-semibold text-emerald-900">{{ detailData.material.sale_price > 0 ? '¥' + Number(detailData.material.sale_price || 0).toFixed(2) : '-' }}</div>
+	                                        <div class="mt-1 text-[11px] text-emerald-700">物料主档销售参考价</div>
+	                                    </div>
+	                                    <div class="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3">
+	                                        <div class="text-xs font-medium text-sky-700">最近采购价</div>
+	                                        <div class="mt-2 text-2xl font-semibold text-sky-900">
+	                                            {{
+	                                                detailData.lastPurchaseReference && detailData.lastPurchaseReference.unitPrice !== null && detailData.lastPurchaseReference.unitPrice !== undefined
+	                                                    ? ('¥' + Number(detailData.lastPurchaseReference.unitPrice || 0).toFixed(2))
+	                                                    : (
+	                                                        detailData.supplierPrices.length && detailData.supplierPrices[0].last_purchase_effective_price !== null && detailData.supplierPrices[0].last_purchase_effective_price !== undefined
+	                                                            ? ('¥' + Number(detailData.supplierPrices[0].last_purchase_effective_price || 0).toFixed(2))
+	                                                            : (detailData.supplierPrices.length && detailData.supplierPrices[0].last_purchase_price !== null && detailData.supplierPrices[0].last_purchase_price !== undefined
+	                                                                ? ('¥' + Number(detailData.supplierPrices[0].last_purchase_price || 0).toFixed(2))
+	                                                                : '-')
+	                                                    )
+	                                            }}
+	                                        </div>
+	                                        <div class="mt-1 text-[11px] text-sky-700">
+	                                            {{
+	                                                detailData.lastPurchaseReference?.purchasedAt
+	                                                    ? ('最近采购时间：' + detailData.lastPurchaseReference.purchasedAt)
+	                                                    : '优先读取最近采购记录'
+	                                            }}
+	                                        </div>
+	                                    </div>
+	                                </div>
+	                            </div>
 	                            <div class="bg-slate-50 rounded-xl p-4 border border-slate-200">
 	                                <div class="text-xs text-slate-500 mb-2">主数据</div>
 	                                <div class="space-y-2 text-sm">
@@ -5437,7 +5607,7 @@
 	                                            <tr v-for="row in detailData.inventory" :key="row.id">
 	                                                <td class="px-4 py-2 text-gray-700">{{ row.warehouse_name }}</td>
 	                                                <td class="px-4 py-2 text-right" :class="row.quantity < 0 ? 'text-rose-600 font-semibold' : 'text-gray-800'">{{ row.quantity }}</td>
-	                                                <td class="px-4 py-2 text-right text-gray-500">{{ row.updated_at || '-' }}</td>
+	                                                <td class="px-4 py-2 text-right text-gray-500">{{ $formatDateTime(row.updated_at) }}</td>
 	                                            </tr>
 	                                        </tbody>
 	                                    </table>
@@ -5696,7 +5866,7 @@
 	                                        </thead>
 	                                        <tbody class="divide-y divide-gray-100">
 	                                            <tr v-for="row in detailData.recentMovements" :key="row.id">
-	                                                <td class="px-4 py-2 text-gray-500">{{ row.created_at }}</td>
+	                                                <td class="px-4 py-2 text-gray-500">{{ $formatDateTime(row.created_at) }}</td>
 	                                                <td class="px-4 py-2 text-gray-700">{{ row.type }}</td>
 	                                                <td class="px-4 py-2 text-gray-700">{{ row.warehouse_name }}</td>
 	                                                <td class="px-4 py-2 text-right" :class="row.type === 'out' ? 'text-rose-600' : 'text-emerald-600'">{{ row.quantity }}</td>
@@ -5977,10 +6147,20 @@
 	            const emptyForm = {
 	                name: '', code: '', categoryId: null, unit: 'PCS', materialType: 'raw', supplyMode: 'purchase_only', lifecycleStatus: 'active',
 	                spec: '', brand: '', costPrice: 0, salePrice: 0, minStock: 0, safetyStock: 0, reorderPoint: 0, targetCoverageQty: 0, coverageDaysTarget: 0,
-	                supplier: '', dimensions: '', weight: null, notes: '', supplyRiskLevel: 'normal', supplyRiskNotes: '',
+	                supplier: '', defaultSupplierSourcePlatform: 'offline', dimensions: '', weight: null, notes: '', supplyRiskLevel: 'normal', supplyRiskNotes: '',
 	                isPurchasable: true, isProducible: false, isSellable: false, isKeyPart: false, isSingleSource: false, versionNo: null
 	            };
 	            const form = ref({ ...emptyForm });
+	            const supplierSourcePlatformOptions = [
+	                { value: 'factory_direct', label: '厂家直采' },
+	                { value: 'taobao', label: '淘宝' },
+	                { value: '1688', label: '1688' },
+	                { value: 'jd', label: '京东' },
+	                { value: 'pdd', label: '拼多多' },
+	                { value: 'wechat', label: '微信 / 私域' },
+	                { value: 'offline', label: '线下' },
+	                { value: 'other', label: '其他' }
+	            ];
 	            const materialUnitOptionsForForm = computed(() => {
 	                const currentUnit = String(form.value.unit || '').trim().toUpperCase();
 	                if (!currentUnit) return MATERIAL_UNIT_OPTIONS;
@@ -6506,7 +6686,7 @@
 	                    safetyStock: m.safety_stock || 0,
 	                    reorderPoint: m.reorder_point || 0,
 	                    targetCoverageQty: m.target_coverage_qty || 0,
-	                    supplier: m.supplier || '', dimensions: m.dimensions || '',
+	                    supplier: m.supplier || '', defaultSupplierSourcePlatform: m.default_supplier_platform || 'offline', dimensions: m.dimensions || '',
 	                    weight: m.weight, notes: m.notes || '',
 	                    isPurchasable: !!m.is_purchasable,
 	                    isProducible: !!m.is_producible,
@@ -6531,6 +6711,14 @@
 	                        },
 	                        baseUnit: form.value.unit
 	                    };
+	                    if (!editingId.value && String(form.value.supplier || '').trim()) {
+	                        payload.suppliers = [{
+	                            supplierName: String(form.value.supplier || '').trim(),
+	                            supplierType: 'distributor',
+	                            sourcePlatform: form.value.defaultSupplierSourcePlatform || 'offline',
+	                            isDefault: 1
+	                        }];
+	                    }
 	                    if (editingId.value) {
 	                        await api.put('/api/materials/' + editingId.value, payload);
 	                    } else {
@@ -6891,7 +7079,7 @@
 	            return {
 	                materials, categories, searchQuery, filterCategory, filterMaterialType, filterLifecycle, filterLowStockOnly, filterNegativeOnly, loading, pagination,
 	                showModal, editingId, form, formLoading, formError,
-	                materialUnitOptionsForForm,
+	                materialUnitOptionsForForm, supplierSourcePlatformOptions,
 	                showDetailModal, detailLoading, detailData, showSubstitutionForm, substitutionForm,
 	                detailSaveLoading, showUomForm, uomForm, showSupplierForm, supplierForm,
 	                showDuplicatesModal, duplicatesLoading, duplicateRule, duplicateGroups, duplicateMasterMap,
@@ -7260,7 +7448,7 @@
                                 <td class="px-4 py-3 text-center">
                                     <span :class="statusClass(s.status)" class="px-2 py-1 rounded-full text-xs font-medium">{{ statusLabel(s.status) }}</span>
                                 </td>
-                                <td class="px-4 py-3 text-sm text-gray-400">{{ s.created_at }}</td>
+                                <td class="px-4 py-3 text-sm text-gray-400">{{ $formatDateTime(s.created_at) }}</td>
                                 <td class="px-4 py-3 text-right">
                                     <select v-if="canAction('shipments', 'edit') && s.status !== 'cancelled' && s.status !== 'delivered'"
                                             @change="updateStatus(s, $event.target.value); $event.target.value = ''"
@@ -7450,7 +7638,7 @@
                                 <span v-else class="text-gray-500">-</span>
                             </div>
                             <div><span class="text-gray-400">创建人：</span><span class="text-gray-800">{{ detailData.shipment.creator_name }}</span></div>
-                            <div><span class="text-gray-400">创建时间：</span><span class="text-gray-800">{{ detailData.shipment.created_at }}</span></div>
+                            <div><span class="text-gray-400">创建时间：</span><span class="text-gray-800">{{ $formatDateTime(detailData.shipment.created_at) }}</span></div>
                         </div>
                         <div v-if="detailData.stockDocument" class="rounded-lg border border-indigo-100 bg-indigo-50 p-4">
                             <div class="flex items-center gap-2 mb-2">
@@ -7460,7 +7648,7 @@
                             <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-indigo-800">
                                 <div>状态：{{ documentStatusLabel(detailData.stockDocument.documentStatus) }}</div>
                                 <div>数量：{{ detailData.stockDocument.quantity }} {{ detailData.stockDocument.unit || '件' }}</div>
-                                <div>执行时间：{{ detailData.stockDocument.executedAt || '-' }}</div>
+                                <div>执行时间：{{ $formatDateTime(detailData.stockDocument.executedAt) }}</div>
                             </div>
                         </div>
                         <div class="overflow-x-auto border border-gray-200 rounded-lg">
@@ -9101,7 +9289,7 @@
                         </tr></thead>
                         <tbody class="divide-y divide-gray-50">
                             <tr v-for="item in movementReport.items" :key="item.id" class="hover:bg-gray-50">
-                                <td class="px-3 py-2 text-xs text-gray-400">{{ item.created_at }}</td>
+                                <td class="px-3 py-2 text-xs text-gray-400">{{ $formatDateTime(item.created_at) }}</td>
                                 <td class="px-3 py-2 text-center">
                                     <span :class="item.type==='in' ? 'bg-emerald-100 text-emerald-700' : item.type==='out' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'"
                                           class="px-2 py-0.5 rounded-full text-xs font-medium">{{ {in:'入库',out:'出库',transfer:'调拨',adjust:'盘点'}[item.type] }}</span>
@@ -9981,7 +10169,7 @@
                         </tr></thead>
                         <tbody class="divide-y divide-gray-50">
                             <tr v-for="item in movementReport.items" :key="item.id" class="hover:bg-gray-50">
-                                <td class="px-3 py-2 text-xs text-gray-400">{{ item.created_at }}</td>
+                                <td class="px-3 py-2 text-xs text-gray-400">{{ $formatDateTime(item.created_at) }}</td>
                                 <td class="px-3 py-2 text-center">
                                     <span :class="item.type==='in' ? 'bg-emerald-100 text-emerald-700' : item.type==='out' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'"
                                           class="px-2 py-0.5 rounded-full text-xs font-medium">{{ {in:'入库',out:'出库',transfer:'调拨',adjust:'盘点'}[item.type] }}</span>
@@ -10218,7 +10406,7 @@
                                     <td class="px-3 py-2 text-sm text-gray-800">{{ doc.materialName }}</td>
                                     <td class="px-3 py-2 text-sm text-gray-500">{{ doc.warehouseName }}</td>
                                     <td class="px-3 py-2 text-sm text-right font-medium">{{ doc.quantity }} {{ doc.unit || '' }}</td>
-                                    <td class="px-3 py-2 text-xs text-gray-400">{{ doc.postedAt || doc.executedAt || doc.submittedAt || '-' }}</td>
+                                    <td class="px-3 py-2 text-xs text-gray-400">{{ $formatDateTime(doc.postedAt || doc.executedAt || doc.submittedAt) }}</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -10237,73 +10425,148 @@
                     </div>
                 </div>
 
-                <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6" v-if="selectedDocument">
-                    <div class="flex items-center justify-between gap-3">
-                        <div>
-                            <div class="text-base font-semibold text-gray-800">单据详情</div>
-                            <div class="text-xs text-gray-400 mt-1">当前可独立查看 {{ config.shortLabel }} 明细{{ config.originType ? '、来源单据' : '' }}和关联流水。</div>
+                <div v-if="selectedDocument" class="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/35 p-4" @click.self="closeDocumentDetail">
+                    <div class="w-full max-w-5xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+                        <div class="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+                            <div>
+                                <div class="text-base font-semibold text-gray-800">单据详情</div>
+                                <div class="text-xs text-gray-400 mt-1">点击单据后会在居中详情面板直接展开，便于仓库人员对照 {{ config.shortLabel }} 明细{{ config.originType ? '、来源单据' : '' }}和关联流水。</div>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button v-if="config.originType && selectedDocument.originType === config.originType && selectedDocument.originId" type="button" @click="openOriginOrder(selectedDocument)" class="text-xs px-3 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 transition">{{ config.originActionLabel || '查看来源单据' }}</button>
+                                <button v-if="config.editRoutePath && ['draft', 'submitted'].includes(selectedDocument.documentStatus)" type="button" @click="openEditDocument(selectedDocument)" class="text-xs px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-100 transition">{{ selectedDocument.documentStatus === 'draft' ? '编辑草稿' : '编辑已提交' }}</button>
+                                <button type="button" @click="loadDocumentDetail(selectedDocument.id)" class="text-xs px-3 py-1.5 rounded-lg bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 transition">刷新详情</button>
+                                <button type="button" @click="closeDocumentDetail" class="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 transition" aria-label="关闭详情">
+                                    ×
+                                </button>
+                            </div>
                         </div>
-                        <div class="flex gap-2">
-                            <button v-if="config.originType && selectedDocument.originType === config.originType && selectedDocument.originId" type="button" @click="openOriginOrder(selectedDocument)" class="text-xs px-3 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 transition">{{ config.originActionLabel || '查看来源单据' }}</button>
-                            <button type="button" @click="loadDocumentDetail(selectedDocument.id)" class="text-xs px-3 py-1.5 rounded-lg bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 transition">刷新详情</button>
-                        </div>
-                    </div>
-                    <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                        <div class="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2"><span class="text-gray-500 text-xs block">单据号</span><span class="font-mono text-gray-800">{{ selectedDocument.documentNo }}</span></div>
-                        <div class="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2"><span class="text-gray-500 text-xs block">状态</span><span class="text-gray-800">{{ formatDocumentStatus(selectedDocument.documentStatus) }}</span></div>
-                        <div v-if="config.originType" class="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2"><span class="text-gray-500 text-xs block">{{ config.originDetailLabel || '来源工单' }}</span><span class="text-gray-800 font-mono">{{ selectedDocument.originNo || '-' }}</span></div>
-                        <div class="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2"><span class="text-gray-500 text-xs block">仓库</span><span class="text-gray-800">{{ selectedDocument.warehouseName }}</span></div>
-                        <div class="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2"><span class="text-gray-500 text-xs block">数量</span><span class="text-gray-800">{{ selectedDocument.quantity }} {{ selectedDocument.unit || '' }}</span></div>
-                        <div class="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2"><span class="text-gray-500 text-xs block">执行时间</span><span class="text-gray-800">{{ selectedDocument.postedAt || selectedDocument.executedAt || selectedDocument.submittedAt || '-' }}</span></div>
-                    </div>
-                    <div v-if="selectedDocument.items?.length" class="mt-4 rounded-xl bg-white border border-gray-100 overflow-hidden">
-                        <div class="px-4 py-3 border-b border-gray-100 text-sm font-medium text-gray-800">单据明细</div>
-                        <div class="overflow-x-auto">
-                            <table class="w-full min-w-[760px]">
-                                <thead class="bg-gray-50/70">
-                                    <tr>
-                                        <th class="text-left px-3 py-2 text-xs text-gray-500">行号</th>
-                                        <th class="text-left px-3 py-2 text-xs text-gray-500">物料</th>
-                                        <th class="text-right px-3 py-2 text-xs text-gray-500">数量</th>
-                                        <th class="text-right px-3 py-2 text-xs text-gray-500">单价</th>
-                                        <th class="text-right px-3 py-2 text-xs text-gray-500">金额</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-gray-100">
-                                    <tr v-for="item in selectedDocument.items" :key="item.id || item.lineNo">
-                                        <td class="px-3 py-2 text-xs text-gray-400">{{ item.lineNo || '-' }}</td>
-                                        <td class="px-3 py-2 text-sm text-gray-800">{{ item.materialName }}<span v-if="item.materialCode" class="text-gray-400 ml-1">({{ item.materialCode }})</span></td>
-                                        <td class="px-3 py-2 text-sm text-right font-medium">{{ item.quantity }} {{ item.unit || '' }}</td>
-                                        <td class="px-3 py-2 text-sm text-right text-gray-500">{{ item.unitPrice ?? '-' }}</td>
-                                        <td class="px-3 py-2 text-sm text-right text-gray-500">{{ item.totalPrice ?? '-' }}</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                    <div v-if="selectedDocument.movements?.length" class="mt-4 rounded-xl bg-white border border-gray-100 overflow-hidden">
-                        <div class="px-4 py-3 border-b border-gray-100 text-sm font-medium text-gray-800">关联流水</div>
-                        <div class="overflow-x-auto">
-                            <table class="w-full min-w-[760px]">
-                                <thead class="bg-gray-50/70">
-                                    <tr>
-                                        <th class="text-left px-3 py-2 text-xs text-gray-500">执行时间</th>
-                                        <th class="text-left px-3 py-2 text-xs text-gray-500">来源标签</th>
-                                        <th class="text-left px-3 py-2 text-xs text-gray-500">物料</th>
-                                        <th class="text-left px-3 py-2 text-xs text-gray-500">仓库</th>
-                                        <th class="text-right px-3 py-2 text-xs text-gray-500">数量</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-gray-100">
-                                    <tr v-for="movement in selectedDocument.movements" :key="movement.id">
-                                        <td class="px-3 py-2 text-xs text-gray-400">{{ movement.executedAt }}</td>
-                                        <td class="px-3 py-2 text-xs text-gray-500">{{ movement.sourceLabel }}</td>
-                                        <td class="px-3 py-2 text-sm text-gray-800">{{ movement.materialName }}</td>
-                                        <td class="px-3 py-2 text-sm text-gray-500">{{ movement.warehouseName }}</td>
-                                        <td class="px-3 py-2 text-sm text-right font-medium">{{ movement.quantity }} {{ movement.unit || '' }}</td>
-                                    </tr>
-                                </tbody>
-                            </table>
+                        <div class="overflow-y-auto max-h-[calc(88vh-4.5rem)] px-5 py-5 space-y-4">
+                            <div class="flex flex-wrap gap-2">
+                                <button v-if="['draft', 'submitted'].includes(selectedDocument.documentStatus) && config.editRoutePath"
+                                        type="button"
+                                        @click="openEditDocument(selectedDocument)"
+                                        class="text-xs px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-100 transition">
+                                    {{ selectedDocument.documentStatus === 'draft' ? '编辑草稿' : '编辑已提交' }}
+                                </button>
+                                <button v-if="selectedDocument.documentStatus === 'draft'"
+                                        type="button"
+                                        @click="changeDocumentStatus(selectedDocument, 'submit')"
+                                        class="text-xs px-3 py-1.5 rounded-lg bg-violet-50 border border-violet-200 text-violet-700 hover:bg-violet-100 transition">提交</button>
+                                <button v-if="selectedDocument.documentStatus === 'draft'"
+                                        type="button"
+                                        @click="changeDocumentStatus(selectedDocument, 'discard')"
+                                        class="text-xs px-3 py-1.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 transition">撤销草稿</button>
+                                <button v-if="selectedDocument.documentStatus === 'submitted'"
+                                        type="button"
+                                        @click="changeDocumentStatus(selectedDocument, 'execute')"
+                                        class="text-xs px-3 py-1.5 rounded-lg bg-violet-50 border border-violet-200 text-violet-700 hover:bg-violet-100 transition">执行</button>
+                                <button v-if="selectedDocument.documentStatus === 'submitted'"
+                                        type="button"
+                                        @click="changeDocumentStatus(selectedDocument, 'void')"
+                                        class="text-xs px-3 py-1.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 transition">作废</button>
+                                <button v-if="selectedDocument.documentStatus === 'executed'"
+                                        type="button"
+                                        @click="changeDocumentStatus(selectedDocument, 'post')"
+                                        class="text-xs px-3 py-1.5 rounded-lg bg-violet-50 border border-violet-200 text-violet-700 hover:bg-violet-100 transition">记账</button>
+                                <button v-if="selectedDocument.documentStatus === 'executed'"
+                                        type="button"
+                                        @click="changeDocumentStatus(selectedDocument, 'unexecute')"
+                                        class="text-xs px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-100 transition">撤销执行</button>
+                                <button v-if="selectedDocument.documentStatus === 'posted'"
+                                        type="button"
+                                        @click="changeDocumentStatus(selectedDocument, 'unpost')"
+                                        class="text-xs px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-100 transition">反记账</button>
+                                <button v-if="selectedDocument.documentStatus === 'posted' && !selectedDocument.isReversal && !selectedDocument.reversedByDocumentId"
+                                        type="button"
+                                        @click="changeDocumentStatus(selectedDocument, 'reverse')"
+                                        class="text-xs px-3 py-1.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 transition">红冲</button>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                                <div class="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2"><span class="text-gray-500 text-xs block">单据号</span><span class="font-mono text-gray-800">{{ selectedDocument.documentNo }}</span></div>
+                                <div class="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2"><span class="text-gray-500 text-xs block">状态</span><span class="text-gray-800">{{ formatDocumentStatus(selectedDocument.documentStatus) }}</span></div>
+                                <div v-if="config.originType" class="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2"><span class="text-gray-500 text-xs block">{{ config.originDetailLabel || '来源工单' }}</span><span class="text-gray-800 font-mono">{{ selectedDocument.originNo || '-' }}</span></div>
+                                <div class="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2"><span class="text-gray-500 text-xs block">仓库</span><span class="text-gray-800">{{ selectedDocument.warehouseName }}</span></div>
+                                <div class="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2"><span class="text-gray-500 text-xs block">数量</span><span class="text-gray-800">{{ selectedDocument.quantity }} {{ selectedDocument.unit || '' }}</span></div>
+                                <div class="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2"><span class="text-gray-500 text-xs block">执行时间</span><span class="text-gray-800">{{ $formatDateTime(selectedDocument.postedAt || selectedDocument.executedAt || selectedDocument.submittedAt) }}</span></div>
+                                <div v-if="selectedDocument.isReversal" class="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2"><span class="text-gray-500 text-xs block">红冲来源</span><span class="text-gray-800 font-mono">{{ selectedDocument.reversalOfDocumentNo || '-' }}</span></div>
+                                <div v-else-if="selectedDocument.reversedByDocumentId" class="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2"><span class="text-gray-500 text-xs block">红冲结果</span><span class="text-gray-800 font-mono">{{ selectedDocument.reversedByDocumentNo || '-' }}</span></div>
+                            </div>
+                            <div v-if="selectedDocument.items?.length" class="rounded-xl bg-white border border-gray-100 overflow-hidden">
+                                <div class="px-4 py-3 border-b border-gray-100 text-sm font-medium text-gray-800">单据明细</div>
+                                <div class="overflow-x-auto">
+                                    <table class="w-full min-w-[760px]">
+                                        <thead class="bg-gray-50/70">
+                                            <tr>
+                                                <th class="text-left px-3 py-2 text-xs text-gray-500">行号</th>
+                                                <th class="text-left px-3 py-2 text-xs text-gray-500">物料</th>
+                                                <th class="text-right px-3 py-2 text-xs text-gray-500">数量</th>
+                                                <th class="text-right px-3 py-2 text-xs text-gray-500">单价</th>
+                                                <th class="text-right px-3 py-2 text-xs text-gray-500">金额</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody class="divide-y divide-gray-100">
+                                            <tr v-for="item in selectedDocument.items" :key="item.id || item.lineNo">
+                                                <td class="px-3 py-2 text-xs text-gray-400">{{ item.lineNo || '-' }}</td>
+                                                <td class="px-3 py-2 text-sm text-gray-800">{{ item.materialName }}<span v-if="item.materialCode" class="text-gray-400 ml-1">({{ item.materialCode }})</span></td>
+                                                <td class="px-3 py-2 text-sm text-right font-medium">{{ item.quantity }} {{ item.unit || '' }}</td>
+                                                <td class="px-3 py-2 text-sm text-right text-gray-500">{{ item.unitPrice ?? '-' }}</td>
+                                                <td class="px-3 py-2 text-sm text-right text-gray-500">{{ item.totalPrice ?? '-' }}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div v-if="selectedDocument.movements?.length" class="rounded-xl bg-white border border-gray-100 overflow-hidden">
+                                <div class="px-4 py-3 border-b border-gray-100 text-sm font-medium text-gray-800">关联流水</div>
+                                <div class="overflow-x-auto">
+                                    <table class="w-full min-w-[760px]">
+                                        <thead class="bg-gray-50/70">
+                                            <tr>
+                                                <th class="text-left px-3 py-2 text-xs text-gray-500">执行时间</th>
+                                                <th class="text-left px-3 py-2 text-xs text-gray-500">来源标签</th>
+                                                <th class="text-left px-3 py-2 text-xs text-gray-500">物料</th>
+                                                <th class="text-left px-3 py-2 text-xs text-gray-500">仓库</th>
+                                                <th class="text-right px-3 py-2 text-xs text-gray-500">数量</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody class="divide-y divide-gray-100">
+                                            <tr v-for="movement in selectedDocument.movements" :key="movement.id">
+                                                <td class="px-3 py-2 text-xs text-gray-400">{{ $formatDateTime(movement.executedAt) }}</td>
+                                                <td class="px-3 py-2 text-xs text-gray-500">{{ movement.sourceLabel }}</td>
+                                                <td class="px-3 py-2 text-sm text-gray-800">{{ movement.materialName }}</td>
+                                                <td class="px-3 py-2 text-sm text-gray-500">{{ movement.warehouseName }}</td>
+                                                <td class="px-3 py-2 text-sm text-right font-medium">{{ movement.quantity }} {{ movement.unit || '' }}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div v-if="selectedDocument.revisions?.length" class="rounded-xl bg-white border border-gray-100 overflow-hidden">
+                                <div class="px-4 py-3 border-b border-gray-100 text-sm font-medium text-gray-800">修订记录</div>
+                                <div class="overflow-x-auto">
+                                    <table class="w-full min-w-[760px]">
+                                        <thead class="bg-gray-50/70">
+                                            <tr>
+                                                <th class="text-left px-3 py-2 text-xs text-gray-500">版本</th>
+                                                <th class="text-left px-3 py-2 text-xs text-gray-500">修改时间</th>
+                                                <th class="text-left px-3 py-2 text-xs text-gray-500">修改人</th>
+                                                <th class="text-left px-3 py-2 text-xs text-gray-500">状态变化</th>
+                                                <th class="text-left px-3 py-2 text-xs text-gray-500">修改原因</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody class="divide-y divide-gray-100">
+                                            <tr v-for="revision in selectedDocument.revisions" :key="revision.id">
+                                                <td class="px-3 py-2 text-xs font-mono text-gray-500">r{{ revision.revisionNo }}</td>
+                                                <td class="px-3 py-2 text-xs text-gray-400">{{ $formatDateTime(revision.createdAt) }}</td>
+                                                <td class="px-3 py-2 text-sm text-gray-700">{{ revision.editedByName || '-' }}</td>
+                                                <td class="px-3 py-2 text-xs text-gray-500">{{ formatDocumentStatus(revision.fromStatus) || '-' }} → {{ formatDocumentStatus(revision.toStatus) || '-' }}</td>
+                                                <td class="px-3 py-2 text-sm text-gray-700">{{ revision.changeReason || '-' }}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -10410,10 +10673,11 @@
                         documentItems.value = documentData.items || [];
                         documentPagination.value = documentData.pagination || { page: 1, limit: 20, total: 0, totalPages: 0 };
                         documentStatusSummary.value = documentData.statusSummary || { draft: 0, submitted: 0, executed: 0, posted: 0, voided: 0 };
-                        const targetDocumentId = preferredDocumentId && documentItems.value.some(item => String(item.id) === String(preferredDocumentId))
-                            ? preferredDocumentId
-                            : documentItems.value[0]?.id;
-                        await loadDocumentDetail(targetDocumentId);
+                        if (preferredDocumentId && documentItems.value.some(item => String(item.id) === String(preferredDocumentId))) {
+                            await loadDocumentDetail(preferredDocumentId);
+                        } else {
+                            selectedDocument.value = null;
+                        }
                     } catch (e) {
                         console.error(e);
                         documentItems.value = [];
@@ -10462,12 +10726,79 @@
                     loadDocumentDetail(document?.id);
                 }
 
+                function closeDocumentDetail() {
+                    selectedDocument.value = null;
+                    routeDocumentId.value = '';
+                }
+
                 function openOriginOrder(document) {
                     if (!config.originType || !document?.originId || document.originType !== config.originType) return;
                     if (config.originRoutePath) {
                         const query = {};
                         if (config.originType === 'production_order') query.orderId = String(document.originId);
                         router.push({ path: config.originRoutePath, query });
+                    }
+                }
+
+                function openEditDocument(document) {
+                    if (!config.editRoutePath || !document?.id || !['draft', 'submitted'].includes(document.documentStatus)) return;
+                    selectedDocument.value = null;
+                    routeDocumentId.value = '';
+                    router.push({
+                        path: config.editRoutePath,
+                        query: { editDraftId: String(document.id) }
+                    });
+                }
+
+                async function changeDocumentStatus(document, action) {
+                    if (!document?.id) return;
+                    try {
+                        const payload = {};
+                        if (action === 'reverse') {
+                            const reason = window.prompt(`请输入红冲原因（单据 ${document.documentNo}）`);
+                            if (reason === null) return;
+                            if (!String(reason).trim()) throw new Error('红冲原因不能为空');
+                            payload.reason = String(reason).trim();
+                        }
+                        if (action === 'void') {
+                            const reason = window.prompt(`请输入作废原因（单据 ${document.documentNo}）`, '录单错误');
+                            if (reason === null) return;
+                            payload.reason = String(reason || '').trim();
+                        }
+                        if (action === 'discard') {
+                            const reason = window.prompt(`请输入撤销草稿原因（单据 ${document.documentNo}）`, '放弃草稿');
+                            if (reason === null) return;
+                            payload.reason = String(reason || '').trim();
+                        }
+                        if (action === 'unexecute') {
+                            const reason = window.prompt(`请输入撤销执行原因（单据 ${document.documentNo}）`, '录单内容需要修正');
+                            if (reason === null) return;
+                            payload.reason = String(reason || '').trim();
+                        }
+                        if (action === 'unpost') {
+                            const reason = window.prompt(`请输入反记账原因（单据 ${document.documentNo}）`, '记账后发现需要修正');
+                            if (reason === null) return;
+                            payload.reason = String(reason || '').trim();
+                        }
+                        const result = await api.post(`/api/stock-documents/${document.id}/${action}`, payload);
+                        const nextDocument = result.document || null;
+                        const messageMap = {
+                            submit: '单据已提交',
+                            discard: '草稿已撤销',
+                            execute: '单据已执行',
+                            void: '单据已作废',
+                            post: '单据已记账',
+                            unexecute: '单据已撤销执行',
+                            unpost: '单据已反记账',
+                            reverse: '红冲单已生成并记账'
+                        };
+                        alert(messageMap[action] || '操作成功');
+                        const targetId = nextDocument?.id || document.id;
+                        routeDocumentId.value = String(targetId);
+                        await loadDocuments(documentPagination.value.page || 1, targetId);
+                    } catch (e) {
+                        console.error(e);
+                        alert(e.message || '操作失败');
                     }
                 }
 
@@ -10513,9 +10844,12 @@
                     resetFilters,
                     changePage,
                     selectDocument,
+                    closeDocumentDetail,
                     loadDocuments,
                     loadDocumentDetail,
                     openOriginOrder,
+                    openEditDocument,
+                    changeDocumentStatus,
                     formatDocumentStatus,
                     documentStatusClass
                 };
@@ -10578,8 +10912,467 @@
         heroBg: 'bg-emerald-100',
         heroIcon: 'text-emerald-600',
         docType: 'receive_execution',
+        editRoutePath: '/receive-execute',
         description: '独立查询采购收货、手工入库与回库类单据，便于仓库和采购侧统一追溯收货记录。'
     });
+
+    const HistoricalPurchaseRecordsPage = {
+        template: `
+        <div>
+            <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6">
+                <div class="flex items-start justify-between gap-4">
+                    <div>
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">历史查询</span>
+                            <h3 class="text-base font-semibold text-amber-900">历史采购记录</h3>
+                        </div>
+                        <p class="text-sm text-amber-700">导入并查询外部系统中的历史采购单据及采购明细，仅用于历史追溯，不参与当前库存计算和正式单据状态流转。</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button @click="openImportModal"
+                                class="px-3 py-2 rounded-lg bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 transition">
+                            导入历史采购记录
+                        </button>
+                        <button @click="loadRecords()"
+                                class="px-3 py-2 rounded-lg border border-amber-200 bg-white text-sm text-amber-700 hover:bg-amber-50 transition">
+                            刷新
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
+                <div class="bg-white rounded-xl border border-slate-200 p-4">
+                    <div class="text-xs text-slate-500 mb-1">历史采购单数</div>
+                    <div class="text-2xl font-semibold text-slate-900">{{ summary.totalRecords || 0 }}</div>
+                </div>
+                <div class="bg-white rounded-xl border border-amber-200 p-4">
+                    <div class="text-xs text-amber-600 mb-1">采购总金额</div>
+                    <div class="text-2xl font-semibold text-amber-700">¥{{ formatMoney(summary.totalAmount) }}</div>
+                </div>
+                <div class="bg-white rounded-xl border border-emerald-200 p-4">
+                    <div class="text-xs text-emerald-600 mb-1">已付款金额</div>
+                    <div class="text-2xl font-semibold text-emerald-700">¥{{ formatMoney(summary.totalPaidAmount) }}</div>
+                </div>
+                <div class="bg-white rounded-xl border border-rose-200 p-4">
+                    <div class="text-xs text-rose-600 mb-1">待付款金额</div>
+                    <div class="text-2xl font-semibold text-rose-700">¥{{ formatMoney(summary.totalUnpaidAmount) }}</div>
+                    <div class="text-xs text-slate-400 mt-2">供应商 {{ summary.supplierCount || 0 }} 家</div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+                    <input v-model.trim="filters.orderNo" @input="debouncedLoad"
+                           placeholder="搜索单据编号"
+                           class="px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-amber-300">
+                    <input v-model.trim="filters.supplier" @input="debouncedLoad"
+                           placeholder="搜索供货单位"
+                           class="px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-amber-300">
+                    <input v-model.trim="filters.warehouse" @input="debouncedLoad"
+                           placeholder="搜索入库仓库"
+                           class="px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-amber-300">
+                    <input v-model="filters.start" @change="loadRecords()" type="date"
+                           class="px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-amber-300">
+                    <input v-model="filters.end" @change="loadRecords()" type="date"
+                           class="px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-amber-300">
+                </div>
+                <div class="flex flex-wrap items-center justify-between gap-3 mt-3">
+                <div class="text-xs text-slate-500">历史采购记录独立建表管理，只用于查询和追溯，不参与当前库存与正式单据核算。</div>
+                    <button @click="resetFilters"
+                            class="px-3 py-1.5 rounded-lg border border-slate-200 text-sm text-slate-700 hover:bg-slate-50 transition">
+                        重置筛选
+                    </button>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full min-w-[980px]">
+                        <thead class="bg-slate-50">
+                            <tr>
+                                <th class="text-left px-3 py-2 text-xs text-slate-500">录单时间</th>
+                                <th class="text-left px-3 py-2 text-xs text-slate-500">单据编号</th>
+                                <th class="text-left px-3 py-2 text-xs text-slate-500">供货单位</th>
+                                <th class="text-left px-3 py-2 text-xs text-slate-500">入库仓库</th>
+                                <th class="text-right px-3 py-2 text-xs text-slate-500">明细行数</th>
+                                <th class="text-right px-3 py-2 text-xs text-slate-500">数量</th>
+                                <th class="text-right px-3 py-2 text-xs text-slate-500">采购金额</th>
+                                <th class="text-right px-3 py-2 text-xs text-slate-500">已付款</th>
+                                <th class="text-right px-3 py-2 text-xs text-slate-500">待付款</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100">
+                            <tr v-for="item in items" :key="item.id" class="hover:bg-slate-50 transition cursor-pointer" @click="openDetail(item)">
+                                <td class="px-3 py-3 text-sm text-slate-600">{{ item.order_date || '-' }}</td>
+                                <td class="px-3 py-3"><div class="font-mono text-sm text-indigo-700">{{ item.order_no }}</div></td>
+                                <td class="px-3 py-3 text-sm text-slate-800">{{ item.supplier_name }}</td>
+                                <td class="px-3 py-3 text-sm text-slate-600">{{ item.warehouse_name || '-' }}</td>
+                                <td class="px-3 py-3 text-right text-sm text-slate-600">{{ item.item_count || 0 }}</td>
+                                <td class="px-3 py-3 text-right text-sm font-medium text-slate-800">{{ formatQty(item.quantity) }}</td>
+                                <td class="px-3 py-3 text-right text-sm font-medium text-amber-700">¥{{ formatMoney(item.amount) }}</td>
+                                <td class="px-3 py-3 text-right text-sm text-emerald-700">¥{{ formatMoney(item.paid_amount) }}</td>
+                                <td class="px-3 py-3 text-right text-sm text-rose-700">¥{{ formatMoney(item.unpaid_amount) }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div v-if="!items.length" class="text-center py-12 text-sm text-slate-400">暂无历史采购记录，可先导入采购单据查询 Excel。</div>
+                <div v-if="pagination.totalPages > 1" class="flex items-center justify-between px-4 py-3 border-t border-slate-100">
+                    <span class="text-sm text-slate-500">共 {{ pagination.total }} 条</span>
+                    <div class="flex gap-1">
+                        <button @click="changePage(pagination.page - 1)" :disabled="pagination.page <= 1" class="px-3 py-1 text-sm rounded border disabled:opacity-40">上一页</button>
+                        <span class="px-3 py-1 text-sm text-slate-500">{{ pagination.page }} / {{ pagination.totalPages }}</span>
+                        <button @click="changePage(pagination.page + 1)" :disabled="pagination.page >= pagination.totalPages" class="px-3 py-1 text-sm rounded border disabled:opacity-40">下一页</button>
+                    </div>
+                </div>
+            </div>
+
+            <div v-if="detailOpen" class="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/35 p-4" @click.self="closeDetail">
+                <div class="w-full max-w-6xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+                    <div class="flex items-start justify-between gap-4 px-6 py-5 border-b border-slate-200">
+                        <div>
+                            <div class="text-xs text-slate-400 mb-1">历史采购记录详情</div>
+                            <h3 class="text-lg font-semibold text-slate-900">{{ detail.order_no || '历史采购记录' }}</h3>
+                            <p class="text-sm text-slate-500 mt-1">仅用于历史查询，不参与当前库存计算和正式单据状态流转。</p>
+                        </div>
+                        <button @click="closeDetail" class="w-10 h-10 inline-flex items-center justify-center rounded-full border border-slate-200 text-slate-500 hover:bg-slate-50">×</button>
+                    </div>
+                    <div class="max-h-[calc(88vh-4.5rem)] overflow-y-auto p-6 space-y-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                                <div class="text-xs text-slate-500 mb-2">录单时间</div>
+                                <div class="text-sm font-medium text-slate-900">{{ detail.order_date || '-' }}</div>
+                            </div>
+                            <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                                <div class="text-xs text-slate-500 mb-2">供货单位</div>
+                                <div class="text-sm font-medium text-slate-900">{{ detail.supplier_name || '-' }}</div>
+                            </div>
+                            <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                                <div class="text-xs text-slate-500 mb-2">入库仓库</div>
+                                <div class="text-sm font-medium text-slate-900">{{ detail.warehouse_name || '-' }}</div>
+                            </div>
+                            <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                                <div class="text-xs text-slate-500 mb-2">导入来源</div>
+                                <div class="text-sm font-medium text-slate-900 break-all">{{ detail.source_file || '-' }}</div>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div class="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                                <div class="text-xs text-amber-600 mb-2">采购金额</div>
+                                <div class="text-xl font-semibold text-amber-700">¥{{ formatMoney(detail.amount) }}</div>
+                            </div>
+                            <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                                <div class="text-xs text-emerald-600 mb-2">已付款金额</div>
+                                <div class="text-xl font-semibold text-emerald-700">¥{{ formatMoney(detail.paid_amount) }}</div>
+                            </div>
+                            <div class="rounded-xl border border-rose-200 bg-rose-50 p-4">
+                                <div class="text-xs text-rose-600 mb-2">待付款金额</div>
+                                <div class="text-xl font-semibold text-rose-700">¥{{ formatMoney(detail.unpaid_amount) }}</div>
+                            </div>
+                        </div>
+                        <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                            <div class="text-xs text-slate-500 mb-2">数量</div>
+                            <div class="text-sm font-medium text-slate-900">{{ formatQty(detail.quantity) }}</div>
+                        </div>
+                        <div class="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+                            <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+                                <div>
+                                    <div class="text-sm font-semibold text-slate-900">这张单买了哪些物料</div>
+                                    <div class="text-xs text-slate-500 mt-1">共 {{ detailItems.length }} 行，默认展开显示这张历史采购单里的物料、数量、单价和金额。</div>
+                                </div>
+                            </div>
+                            <div v-if="detailItems.length" class="overflow-x-auto">
+                                <table class="w-full min-w-[980px]">
+                                    <thead class="bg-slate-50">
+                                        <tr>
+                                            <th class="text-left px-3 py-2 text-xs text-slate-500">行号</th>
+                                            <th class="text-left px-3 py-2 text-xs text-slate-500">商品编号</th>
+                                            <th class="text-left px-3 py-2 text-xs text-slate-500">商品名称</th>
+                                            <th class="text-left px-3 py-2 text-xs text-slate-500">规格</th>
+                                            <th class="text-left px-3 py-2 text-xs text-slate-500">型号</th>
+                                            <th class="text-left px-3 py-2 text-xs text-slate-500">单位</th>
+                                            <th class="text-right px-3 py-2 text-xs text-slate-500">数量</th>
+                                            <th class="text-right px-3 py-2 text-xs text-slate-500">单价</th>
+                                            <th class="text-right px-3 py-2 text-xs text-slate-500">金额</th>
+                                            <th class="text-left px-3 py-2 text-xs text-slate-500">备注</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-slate-100">
+                                        <tr v-for="item in detailItems" :key="'purchase-item-' + item.id">
+                                            <td class="px-3 py-2 text-sm text-slate-500">{{ item.line_no }}</td>
+                                            <td class="px-3 py-2 font-mono text-sm text-indigo-700">{{ item.item_code || '-' }}</td>
+                                            <td class="px-3 py-2">
+                                                <div class="text-sm font-semibold text-slate-900">{{ item.item_name || '-' }}</div>
+                                                <div v-if="item.item_code" class="text-xs text-slate-400 mt-0.5">编码：{{ item.item_code }}</div>
+                                            </td>
+                                            <td class="px-3 py-2 text-sm text-slate-500">{{ item.spec || '-' }}</td>
+                                            <td class="px-3 py-2 text-sm text-slate-500">{{ item.model || '-' }}</td>
+                                            <td class="px-3 py-2 text-sm text-slate-500">{{ item.unit || '-' }}</td>
+                                            <td class="px-3 py-2 text-right text-sm font-medium text-slate-800">{{ formatQty(item.quantity) }}</td>
+                                            <td class="px-3 py-2 text-right text-sm text-slate-700">¥{{ formatMoney(item.unit_price) }}</td>
+                                            <td class="px-3 py-2 text-right text-sm font-medium text-amber-700">¥{{ formatMoney(item.amount) }}</td>
+                                            <td class="px-3 py-2 text-sm text-slate-500">{{ item.note || '-' }}</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div v-else class="px-4 py-10 text-center text-sm text-slate-400">当前历史采购单还没有导入采购明细。</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div v-if="showImportModal" class="fixed inset-0 bg-black/40 flex items-center justify-center z-[70] p-4" @click.self="closeImportModal">
+                <div class="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
+                    <div class="px-6 py-5 border-b border-slate-200 flex items-center justify-between">
+                        <div>
+                            <h3 class="text-lg font-semibold text-slate-900">导入历史采购记录</h3>
+                            <p class="text-sm text-slate-500 mt-1">支持采购单据查询汇总表和商品采购明细表，导入后可独立查询历史采购金额、供应商、仓库和采购明细。</p>
+                        </div>
+                        <button @click="closeImportModal" class="w-10 h-10 inline-flex items-center justify-center rounded-full border border-slate-200 text-slate-500 hover:bg-slate-50">×</button>
+                    </div>
+                    <div class="flex-1 overflow-y-auto p-6 space-y-4">
+                        <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                            <div class="text-sm font-medium text-slate-800 mb-2">选择文件</div>
+                            <div class="flex flex-wrap items-center gap-3">
+                                <input ref="importFileInput" type="file" accept=".xlsx,.xls" @change="handleImportFileChange" class="text-sm text-slate-600">
+                                <span v-if="importFileName" class="text-sm text-slate-500">{{ importFileName }}</span>
+                            </div>
+                            <div v-if="importError" class="mt-3 text-sm text-rose-600">{{ importError }}</div>
+                        </div>
+                        <div class="flex flex-wrap gap-3">
+                            <button @click="previewImport" :disabled="importLoading || !importFile"
+                                    class="px-4 py-2 rounded-lg bg-amber-600 text-white text-sm font-medium disabled:opacity-50">
+                                {{ importLoading ? '校验中...' : '开始校验' }}
+                            </button>
+                            <button @click="commitImport" :disabled="commitLoading || !importPreviewToken"
+                                    class="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium disabled:opacity-50">
+                                {{ commitLoading ? '导入中...' : '确认导入' }}
+                            </button>
+                        </div>
+                        <div v-if="importPreview.summary.total" class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            <div class="rounded-xl border border-slate-200 bg-white p-4"><div class="text-xs text-slate-500 mb-1">总记录</div><div class="text-xl font-semibold text-slate-900">{{ importPreview.summary.total }}</div></div>
+                            <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4"><div class="text-xs text-emerald-600 mb-1">可新增</div><div class="text-xl font-semibold text-emerald-700">{{ importPreview.summary.creatable }}</div></div>
+                            <div class="rounded-xl border border-sky-200 bg-sky-50 p-4"><div class="text-xs text-sky-600 mb-1">可更新</div><div class="text-xl font-semibold text-sky-700">{{ importPreview.summary.updatable }}</div></div>
+                            <div class="rounded-xl border border-rose-200 bg-rose-50 p-4"><div class="text-xs text-rose-600 mb-1">无效</div><div class="text-xl font-semibold text-rose-700">{{ importPreview.summary.invalid }}</div></div>
+                        </div>
+                        <div v-if="importPreview.items.length" class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                            <div class="px-4 py-3 border-b border-slate-200 text-sm font-medium text-slate-800">导入预览</div>
+                            <div class="overflow-x-auto max-h-[420px]">
+                                <table class="w-full min-w-[980px]">
+                                    <thead class="bg-slate-50">
+                                        <tr>
+                                            <th class="text-left px-3 py-2 text-xs text-slate-500">行号</th>
+                                            <th class="text-left px-3 py-2 text-xs text-slate-500">动作</th>
+                                            <th class="text-left px-3 py-2 text-xs text-slate-500">录单时间</th>
+                                            <th class="text-left px-3 py-2 text-xs text-slate-500">单据编号</th>
+                                            <th class="text-left px-3 py-2 text-xs text-slate-500">供货单位</th>
+                                            <th class="text-left px-3 py-2 text-xs text-slate-500">入库仓库</th>
+                                            <th class="text-right px-3 py-2 text-xs text-slate-500">明细行数</th>
+                                            <th class="text-right px-3 py-2 text-xs text-slate-500">采购金额</th>
+                                            <th class="text-left px-3 py-2 text-xs text-slate-500">校验结果</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-slate-100">
+                                        <tr v-for="item in importPreview.items.slice(0, 120)" :key="'purchase-preview-' + item.row">
+                                            <td class="px-3 py-2 text-xs text-slate-500">{{ item.row }}</td>
+                                            <td class="px-3 py-2"><span :class="importActionClass(item.action)" class="inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium">{{ importActionLabel(item.action) }}</span></td>
+                                            <td class="px-3 py-2 text-sm text-slate-600">{{ item.orderDate || '-' }}</td>
+                                            <td class="px-3 py-2 font-mono text-sm text-indigo-700">{{ item.orderNo || '-' }}</td>
+                                            <td class="px-3 py-2 text-sm text-slate-800">{{ item.supplierName || '-' }}</td>
+                                            <td class="px-3 py-2 text-sm text-slate-600">{{ item.warehouseName || '-' }}</td>
+                                            <td class="px-3 py-2 text-right text-sm text-slate-600">{{ item.itemCount || 0 }}</td>
+                                            <td class="px-3 py-2 text-right text-sm text-amber-700">¥{{ formatMoney(item.amount) }}</td>
+                                            <td class="px-3 py-2 text-xs"><span v-if="item.errors?.length" class="text-rose-600">{{ item.errors.join('；') }}</span><span v-else class="text-emerald-600">通过</span></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        `,
+        setup() {
+            const showToast = inject('showToast');
+            const items = ref([]);
+            const summary = ref({ totalRecords: 0, supplierCount: 0, totalQuantity: 0, totalAmount: 0, totalPaidAmount: 0, totalUnpaidAmount: 0 });
+            const pagination = ref({ page: 1, limit: 20, total: 0, totalPages: 0 });
+            const filters = ref({ start: '', end: '', supplier: '', orderNo: '', warehouse: '' });
+            const detail = ref({});
+            const detailItems = ref([]);
+            const detailOpen = ref(false);
+            const showImportModal = ref(false);
+            const importFile = ref(null);
+            const importFileName = ref('');
+            const importFileInput = ref(null);
+            const importPreviewToken = ref('');
+            const importPreview = ref({ summary: { total: 0, creatable: 0, updatable: 0, invalid: 0 }, items: [] });
+            const importLoading = ref(false);
+            const commitLoading = ref(false);
+            const importError = ref('');
+            let debounceTimer = null;
+
+            function createQuery(page = 1) {
+                const params = new URLSearchParams({ page: String(page), limit: '20' });
+                if (filters.value.start) params.set('start', filters.value.start);
+                if (filters.value.end) params.set('end', filters.value.end);
+                if (filters.value.supplier) params.set('supplier', filters.value.supplier);
+                if (filters.value.orderNo) params.set('orderNo', filters.value.orderNo);
+                if (filters.value.warehouse) params.set('warehouse', filters.value.warehouse);
+                return params.toString();
+            }
+
+            async function loadRecords(page = 1) {
+                try {
+                    const data = await api.get('/api/purchase-records?' + createQuery(page));
+                    items.value = data.items || [];
+                    summary.value = data.summary || summary.value;
+                    pagination.value = data.pagination || pagination.value;
+                } catch (e) {
+                    showToast?.(e.message || '加载历史采购记录失败', 'error');
+                }
+            }
+
+            async function openDetail(item) {
+                try {
+                    const data = await api.get('/api/purchase-records/' + item.id);
+                    detail.value = data.record || {};
+                    detailItems.value = data.items || [];
+                    detailOpen.value = true;
+                } catch (e) {
+                    showToast?.(e.message || '加载详情失败', 'error');
+                }
+            }
+
+            function closeDetail() {
+                detailOpen.value = false;
+                detail.value = {};
+                detailItems.value = [];
+            }
+
+            function resetFilters() {
+                filters.value = { start: '', end: '', supplier: '', orderNo: '', warehouse: '' };
+                loadRecords(1);
+            }
+
+            function changePage(page) {
+                if (page < 1 || page > pagination.value.totalPages) return;
+                loadRecords(page);
+            }
+
+            function debouncedLoad() {
+                clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => loadRecords(1), 250);
+            }
+
+            function openImportModal() {
+                showImportModal.value = true;
+            }
+
+            function closeImportModal() {
+                showImportModal.value = false;
+                importFile.value = null;
+                importFileName.value = '';
+                importPreviewToken.value = '';
+                importPreview.value = { summary: { total: 0, creatable: 0, updatable: 0, invalid: 0 }, items: [] };
+                importError.value = '';
+                if (importFileInput.value) importFileInput.value.value = '';
+            }
+
+            function handleImportFileChange(event) {
+                const file = event.target.files?.[0] || null;
+                importFile.value = file;
+                importFileName.value = file?.name || '';
+                importPreviewToken.value = '';
+                importPreview.value = { summary: { total: 0, creatable: 0, updatable: 0, invalid: 0 }, items: [] };
+                importError.value = '';
+            }
+
+            async function previewImport() {
+                if (!importFile.value) {
+                    importError.value = '请先选择文件';
+                    return;
+                }
+                importLoading.value = true;
+                importError.value = '';
+                try {
+                    const formData = new FormData();
+                    formData.append('file', importFile.value);
+                    const response = await fetch('/api/purchase-records/import/preview', {
+                        method: 'POST',
+                        body: formData,
+                        credentials: 'same-origin'
+                    });
+                    const json = await response.json();
+                    if (!json.success) throw new Error(json.error?.message || '校验失败');
+                    importPreviewToken.value = json.data.previewToken;
+                    importPreview.value = {
+                        summary: json.data.summary || { total: 0, creatable: 0, updatable: 0, invalid: 0 },
+                        items: json.data.items || []
+                    };
+                    showToast?.('历史采购记录校验完成', 'success');
+                } catch (e) {
+                    importError.value = e.message || '校验失败';
+                    showToast?.(importError.value, 'error');
+                } finally {
+                    importLoading.value = false;
+                }
+            }
+
+            async function commitImport() {
+                if (!importPreviewToken.value) {
+                    importError.value = '请先完成校验';
+                    return;
+                }
+                commitLoading.value = true;
+                importError.value = '';
+                try {
+                    const result = await api.post('/api/purchase-records/import/commit', { previewToken: importPreviewToken.value });
+                    showToast?.(`历史采购记录导入完成：新增 ${result.imported}，更新 ${result.updated}`, 'success');
+                    closeImportModal();
+                    await loadRecords(1);
+                } catch (e) {
+                    importError.value = e.message || '导入失败';
+                    showToast?.(importError.value, 'error');
+                } finally {
+                    commitLoading.value = false;
+                }
+            }
+
+            function importActionLabel(action) {
+                return ({ create: '新增', update: '更新', invalid: '无效' }[action] || action);
+            }
+
+            function importActionClass(action) {
+                return ({
+                    create: 'bg-emerald-50 text-emerald-700',
+                    update: 'bg-sky-50 text-sky-700',
+                    invalid: 'bg-rose-50 text-rose-700'
+                }[action] || 'bg-slate-100 text-slate-700');
+            }
+
+            function formatMoney(value) {
+                return Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            }
+
+            function formatQty(value) {
+                return Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+            }
+
+            onMounted(() => loadRecords());
+
+            return {
+                items, summary, pagination, filters, detail, detailItems, detailOpen, showImportModal, importFile, importFileName, importFileInput,
+                importPreviewToken, importPreview, importLoading, commitLoading, importError,
+                loadRecords, openDetail, closeDetail, resetFilters, changePage, debouncedLoad,
+                openImportModal, closeImportModal, handleImportFileChange, previewImport, commitImport,
+                importActionLabel, importActionClass, formatMoney, formatQty
+            };
+        }
+    };
 
     const InventoryAdjustmentDocumentsPage = createProductionDocumentPage({
         title: '库存调整单',
@@ -10588,6 +11381,7 @@
         heroBg: 'bg-rose-100',
         heroIcon: 'text-rose-600',
         docType: 'count_execution',
+        editRoutePath: '/count-execute',
         description: '独立查询盘盈盘亏、报废差异与库存调整单据，不再只依赖盘点执行页查看。'
     });
 
@@ -10764,7 +11558,7 @@
                                     <div v-if="item.reversedByExceptionNo" class="mt-1">已红冲到 {{ item.reversedByExceptionNo }}</div>
                                     <div v-if="!item.isReversal && !item.reversalOfExceptionNo && !item.reversedByExceptionNo" class="text-slate-300">-</div>
                                 </td>
-                                <td class="px-3 py-3 align-top text-xs text-slate-400">{{ item.createdAt || '-' }}</td>
+                                <td class="px-3 py-3 align-top text-xs text-slate-400">{{ $formatDateTime(item.createdAt) }}</td>
                                 <td class="px-3 py-3 align-top text-right">
                                     <div class="flex justify-end gap-2">
                                         <button @click="viewDetail(item)"
@@ -10858,7 +11652,7 @@
                             <div>红冲自：{{ detail.reversalOfExceptionNo || '-' }}</div>
                             <div>已红冲到：{{ detail.reversedByExceptionNo || '-' }}</div>
                             <div>红冲时间：{{ detail.reversedAt || '-' }}</div>
-                            <div>创建时间：{{ detail.createdAt || '-' }}</div>
+                            <div>创建时间：{{ $formatDateTime(detail.createdAt) }}</div>
                         </div>
                         <div class="mt-3 text-sm text-slate-600">
                             <div class="font-medium text-slate-800 mb-1">备注</div>
@@ -11780,7 +12574,7 @@
                                     </div>
                                 </td>
                                 <td class="px-4 py-3 text-center"><span :class="poStatusClass(o.status)" class="px-2 py-1 rounded-full text-xs font-medium">{{ poStatusLabel(o.status) }}</span></td>
-                                <td class="px-4 py-3 text-sm text-gray-400">{{ o.created_at }}</td>
+                                <td class="px-4 py-3 text-sm text-gray-400">{{ $formatDateTime(o.created_at) }}</td>
                                 <td class="px-4 py-3 text-right">
                                     <select v-if="canAction('production', 'edit') && (o.status==='planned' || o.status==='in_progress')"
                                             @change="updateStatus(o, $event.target.value); $event.target.value=''"
@@ -11875,7 +12669,7 @@
                                 <span class="text-xs text-sky-700">创建时已固化，后续主数据修改不影响当前工单</span>
                             </div>
                             <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-sky-900">
-                                <div>快照时间：{{ detailData.snapshots?.createdAt || '-' }}</div>
+                                <div>快照时间：{{ $formatDateTime(detailData.snapshots?.createdAt) }}</div>
                                 <div>SOP快照：{{ detailData.snapshots?.sop?.title || '-' }}<span v-if="detailData.snapshots?.sop?.version"> v{{ detailData.snapshots.sop.version }}</span></div>
                                 <div>BOM快照：{{ detailData.snapshots?.bom?.name || '未关联' }}<span v-if="detailData.snapshots?.bom?.version"> v{{ detailData.snapshots.bom.version }}</span></div>
                             </div>
@@ -12022,7 +12816,7 @@
                                         </div>
                                         <div class="mt-2 grid grid-cols-2 gap-2 text-[11px] text-gray-500">
                                             <div>数量：{{ documentQuantity(doc) }}</div>
-                                            <div>记账时间：{{ doc.postedAt || doc.executedAt || '-' }}</div>
+                                            <div>记账时间：{{ $formatDateTime(doc.postedAt || doc.executedAt) }}</div>
                                             <div>单据类型：{{ doc.documentType || '-' }}</div>
                                             <div>备注：{{ doc.notes || '-' }}</div>
                                         </div>
@@ -12049,7 +12843,7 @@
                                         </div>
                                         <div class="mt-2 grid grid-cols-2 gap-2 text-[11px] text-gray-500">
                                             <div>数量：{{ documentQuantity(doc) }}</div>
-                                            <div>记账时间：{{ doc.postedAt || doc.executedAt || '-' }}</div>
+                                            <div>记账时间：{{ $formatDateTime(doc.postedAt || doc.executedAt) }}</div>
                                             <div>单据类型：{{ doc.documentType || '-' }}</div>
                                             <div>备注：{{ doc.notes || '-' }}</div>
                                         </div>
@@ -12152,7 +12946,7 @@
                                     </div>
                                     <div class="text-right text-xs text-slate-600">
                                         <div>条目数：{{ exceptionRecords(detailData).length }}</div>
-                                            <div>最近更新时间：{{ exceptionRecords(detailData)[0]?.createdAt || exceptionRecords(detailData)[0]?.created_at || '-' }}</div>
+                                            <div>最近更新时间：{{ $formatDateTime(exceptionRecords(detailData)[0]?.createdAt || exceptionRecords(detailData)[0]?.created_at) }}</div>
                                         </div>
                                     </div>
                                     <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
@@ -12166,7 +12960,7 @@
                                                         {{ exceptionDirectionLabel(ex.direction) }}
                                                     </span>
                                                 </div>
-                                                <div class="text-xs text-gray-500">{{ ex.created_at || ex.createdAt || '-' }}</div>
+                                                <div class="text-xs text-gray-500">{{ $formatDateTime(ex.created_at || ex.createdAt) }}</div>
                                             </div>
                                             <div class="mt-2 text-sm text-gray-800">
                                                 <span class="font-medium">{{ ex.material_name || ex.materialName || '-' }}</span>
@@ -13228,7 +14022,7 @@
                         <div v-for="v in versionList" :key="v.id" class="border border-gray-200 rounded-lg p-3 hover:bg-gray-50">
                             <div class="flex items-center justify-between mb-1">
                                 <span class="text-sm font-medium text-gray-800">v{{ v.version }}</span>
-                                <span class="text-xs text-gray-400">{{ v.created_at }}</span>
+                                <span class="text-xs text-gray-400">{{ $formatDateTime(v.created_at) }}</span>
                             </div>
                             <p v-if="v.change_notes" class="text-xs text-gray-500 mb-2">{{ v.change_notes }}</p>
                             <div class="flex items-center justify-between">
@@ -14347,6 +15141,7 @@
         { path: '/statistics', component: StatisticsPage, meta: { title: '分析看板', subtitle: '报表模块的总览与趋势入口' } },
         { path: '/reports', component: ReportsPage, meta: { title: '业务报表', subtitle: '报表模块的核算、导出与治理入口' } },
         { path: '/purchase-receipts', component: PurchaseReceiptDocumentsPage, meta: { title: '采购收货单', subtitle: '独立查询采购收货、手工入库与回库单据' } },
+        { path: '/historical-purchase-records', component: HistoricalPurchaseRecordsPage, meta: { title: '历史采购记录', subtitle: '导入并查询外部历史采购单据汇总，不参与当前库存计算' } },
         { path: '/inventory-adjustments', component: InventoryAdjustmentDocumentsPage, meta: { title: '库存调整单', subtitle: '独立查询盘盈盘亏、报废差异与库存调整单据' } },
         { path: '/sops', component: SOPsPage, meta: { title: 'SOP管理', subtitle: '生产模块中的工艺定义入口' } },
         { path: '/boms', component: BOMsPage, meta: { title: 'BOM管理', subtitle: '生产模块中的结构定义入口' } },
@@ -14412,6 +15207,7 @@
                 { path: '/materials', label: '物料', icon: 'package', permission: 'materials' },
                 { path: '/receive', label: '入库', icon: 'inbox', permission: ['warehouses', 'production'] },
                 { path: '/purchase-receipts', label: '采购收货单', icon: 'clipboard-list', permission: 'receive', secondary: true },
+                { path: '/historical-purchase-records', label: '历史采购记录', icon: 'history', permission: 'receive', secondary: true },
                 { path: '/issue', label: '出库', icon: 'send', permission: ['shipments', 'production', 'warehouses'] },
                 { path: '/transfer', label: '调拨', icon: 'arrow-right-left', permission: ['warehouses', 'production'] },
                 { path: '/count', label: '盘点', icon: 'clipboard-check', permission: ['warehouses', 'reports'] },
@@ -14555,7 +15351,7 @@
                 const currentPath = router.currentRoute.value.path;
                 if (matchesRoutePath(currentPath, path)) return true;
                 const relatedMap = {
-                    '/receive': ['/purchase-receipts'],
+                    '/receive': ['/purchase-receipts', '/historical-purchase-records'],
                     '/count': ['/inventory-adjustments'],
                     '/manufacturing': ['/production', '/production-issue-docs', '/production-receipt-docs', '/production-return-docs', '/production-exceptions', '/sops', '/boms'],
                     '/reporting': ['/statistics', '/reports', '/report-movements', '/consistency-governance'],
@@ -14803,6 +15599,7 @@
         }
     });
 
+    app.config.globalProperties.$formatDateTime = formatLocalDateTime;
     app.component('material-search-select', MaterialSearchSelect);
     app.use(router);
     app.mount('#app');

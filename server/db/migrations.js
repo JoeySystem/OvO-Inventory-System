@@ -283,6 +283,38 @@ function runStockExecutionDocumentStorageMigration(db) {
     });
 }
 
+function runExecutionTimestampLocalizationMigration(db) {
+    applyMigration(db, '020_execution_timestamps_to_localtime', () => {
+        if (hasTable(db, 'stock_documents')) {
+            db.exec(`
+                UPDATE stock_documents
+                SET executed_at = datetime(executed_at, 'localtime')
+                WHERE executed_at IS NOT NULL
+                  AND created_at IS NOT NULL
+                  AND datetime(executed_at, '+6 hours') <= datetime(created_at)
+            `);
+
+            db.exec(`
+                UPDATE stock_documents
+                SET posted_at = datetime(posted_at, 'localtime')
+                WHERE posted_at IS NOT NULL
+                  AND created_at IS NOT NULL
+                  AND datetime(posted_at, '+6 hours') <= datetime(created_at)
+            `);
+        }
+
+        if (hasTable(db, 'stock_movements')) {
+            db.exec(`
+                UPDATE stock_movements
+                SET executed_at = datetime(executed_at, 'localtime')
+                WHERE executed_at IS NOT NULL
+                  AND created_at IS NOT NULL
+                  AND datetime(executed_at, '+6 hours') <= datetime(created_at)
+            `);
+        }
+    });
+}
+
 function runStockDocumentWorkflowMigration(db) {
     if (!hasTable(db, 'stock_documents')) return;
 
@@ -807,12 +839,96 @@ function runProductionExceptionGovernanceMigration(db) {
     });
 }
 
+function runHistoricalPurchaseRecordsMigration(db) {
+    applyMigration(db, '024_historical_purchase_records', () => {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS purchase_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_date TEXT NOT NULL,
+                order_no TEXT NOT NULL UNIQUE,
+                supplier_name TEXT NOT NULL,
+                warehouse_name TEXT,
+                quantity REAL DEFAULT 0,
+                amount REAL DEFAULT 0,
+                paid_amount REAL DEFAULT 0,
+                unpaid_amount REAL DEFAULT 0,
+                source_file TEXT,
+                raw_source TEXT,
+                created_by INTEGER REFERENCES users(id),
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_purchase_records_order_date
+                ON purchase_records(order_date);
+            CREATE INDEX IF NOT EXISTS idx_purchase_records_supplier
+                ON purchase_records(supplier_name);
+            CREATE INDEX IF NOT EXISTS idx_purchase_records_warehouse
+                ON purchase_records(warehouse_name);
+        `);
+    });
+}
+
+function runStockDocumentRevisionMigration(db) {
+    applyMigration(db, '025_stock_document_revisions', () => {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS stock_document_revisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL REFERENCES stock_documents(id) ON DELETE CASCADE,
+                revision_no INTEGER NOT NULL,
+                from_status TEXT,
+                to_status TEXT,
+                edited_by INTEGER REFERENCES users(id),
+                change_reason TEXT,
+                before_snapshot TEXT,
+                after_snapshot TEXT,
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                UNIQUE(document_id, revision_no)
+            );
+            CREATE INDEX IF NOT EXISTS idx_stock_document_revisions_document
+                ON stock_document_revisions(document_id);
+            CREATE INDEX IF NOT EXISTS idx_stock_document_revisions_editor
+                ON stock_document_revisions(edited_by);
+        `);
+    });
+}
+
+function runHistoricalPurchaseRecordItemsMigration(db) {
+    applyMigration(db, '026_historical_purchase_record_items', () => {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS purchase_record_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id INTEGER NOT NULL REFERENCES purchase_records(id) ON DELETE CASCADE,
+                line_no INTEGER NOT NULL,
+                item_code TEXT,
+                item_name TEXT,
+                spec TEXT,
+                model TEXT,
+                brand TEXT,
+                unit TEXT,
+                quantity REAL DEFAULT 0,
+                unit_price REAL DEFAULT 0,
+                amount REAL DEFAULT 0,
+                note TEXT,
+                raw_source TEXT,
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+                UNIQUE(record_id, line_no)
+            );
+            CREATE INDEX IF NOT EXISTS idx_purchase_record_items_record
+                ON purchase_record_items(record_id);
+            CREATE INDEX IF NOT EXISTS idx_purchase_record_items_code
+                ON purchase_record_items(item_code);
+        `);
+    });
+}
+
 function runMigrations(db) {
     ensureMigrationsTable(db);
     runLegacyMigrations(db);
     runMaterialMasterMigration(db);
     runWarehouseActionDocumentMigration(db);
     runStockExecutionDocumentStorageMigration(db);
+    runExecutionTimestampLocalizationMigration(db);
     runStockDocumentWorkflowMigration(db);
     runStockDocumentReversalMigration(db);
     runShipmentDocumentLinkMigration(db);
@@ -833,6 +949,9 @@ function runMigrations(db) {
     runSupplyRiskGovernanceMigration(db);
     runBomNamingGovernanceMigration(db);
     runProductionExceptionGovernanceMigration(db);
+    runHistoricalPurchaseRecordsMigration(db);
+    runStockDocumentRevisionMigration(db);
+    runHistoricalPurchaseRecordItemsMigration(db);
 }
 
 module.exports = { runMigrations };
