@@ -94,6 +94,23 @@ function buildExecutedAt() {
     return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
 }
 
+function normalizeDocumentDate(value) {
+    if (!value) return null;
+    const text = String(value).trim();
+    const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) throw new ValidationError('单据日期格式应为 YYYY-MM-DD', 'documentDate');
+    const date = new Date(`${text}T00:00:00`);
+    if (Number.isNaN(date.getTime())) throw new ValidationError('单据日期无效', 'documentDate');
+    return text;
+}
+
+function buildTimestampForDocumentDate(documentDate) {
+    if (!documentDate) return buildExecutedAt();
+    const now = new Date();
+    const pad = (value) => String(value).padStart(2, '0');
+    return `${documentDate} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+}
+
 function generateExecutionDocNo(prefix) {
     const now = new Date();
     const pad = (value) => String(value).padStart(2, '0');
@@ -105,6 +122,15 @@ function generateExecutionDocNo(prefix) {
 
 function generateReversalDocNo(originalDocNo) {
     return `REV-${originalDocNo}`;
+}
+
+function ensureUniqueDocumentNo(db, docNo, excludeId = null) {
+    const existing = excludeId
+        ? db.prepare('SELECT id FROM stock_documents WHERE doc_no = ? AND id != ?').get(docNo, excludeId)
+        : db.prepare('SELECT id FROM stock_documents WHERE doc_no = ?').get(docNo);
+    if (existing) {
+        throw new ValidationError('单据号已存在，请更换单据号', 'referenceNo');
+    }
 }
 
 function normalizeItems(items) {
@@ -181,7 +207,7 @@ function validateItems(db, docType, items, header) {
             ...item,
             quantity: Number(item.quantity),
             unit: material.unit,
-            totalPrice: item.unitPrice !== null ? Number(item.unitPrice) * Number(item.quantity) : null
+            totalPrice: item.unitPrice !== null ? Math.round(Number(item.unitPrice) * Number(item.quantity) * 100) / 100 : null
         };
     });
 }
@@ -265,6 +291,7 @@ function hydrateDocument(db, row) {
         counterparty: row.counterparty || null,
         referenceNo: row.reference_no || null,
         notes: row.notes || '',
+        documentDate: row.document_date || null,
         originType: row.origin_type || null,
         originId: row.origin_id || null,
         originNo: row.origin_no || null,
@@ -459,15 +486,17 @@ function createDocument(db, payload, userId, targetStatus = 'draft') {
     const docNo = payload.referenceNo && String(payload.referenceNo).trim()
         ? String(payload.referenceNo).trim()
         : generateExecutionDocNo(config.prefix);
-    const now = buildExecutedAt();
+    ensureUniqueDocumentNo(db, docNo);
+    const documentDate = normalizeDocumentDate(payload.documentDate) || buildExecutedAt().slice(0, 10);
+    const now = buildTimestampForDocumentDate(documentDate);
 
     const result = db.prepare(`
         INSERT INTO stock_documents (
             doc_no, doc_type, biz_type, status, source, warehouse_id, to_warehouse_id,
-            counterparty, reference_no, notes, origin_type, origin_id,
+            counterparty, reference_no, notes, document_date, origin_type, origin_id,
             submitted_at, submitted_by, created_by, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'), datetime('now', 'localtime'))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'), datetime('now', 'localtime'))
     `).run(
         docNo,
         docType,
@@ -479,6 +508,7 @@ function createDocument(db, payload, userId, targetStatus = 'draft') {
         payload.counterparty ? String(payload.counterparty).trim() : null,
         docNo,
         payload.notes ? String(payload.notes).trim() : null,
+        documentDate,
         originType,
         originId,
         targetStatus === 'submitted' ? now : null,
@@ -511,11 +541,13 @@ function updateDocument(db, id, payload, userId = null) {
     const docNo = payload.referenceNo && String(payload.referenceNo).trim()
         ? String(payload.referenceNo).trim()
         : current.doc_no;
+    ensureUniqueDocumentNo(db, docNo, id);
+    const documentDate = normalizeDocumentDate(payload.documentDate) || current.document_date || buildExecutedAt().slice(0, 10);
 
     db.prepare(`
         UPDATE stock_documents
         SET doc_no = ?, doc_type = ?, biz_type = ?, source = ?, warehouse_id = ?, to_warehouse_id = ?,
-            counterparty = ?, reference_no = ?, notes = ?, status = ?,
+            counterparty = ?, reference_no = ?, notes = ?, document_date = ?, status = ?,
             submitted_at = ?, submitted_by = ?, status_reason = ?, updated_at = datetime('now', 'localtime')
         WHERE id = ?
     `).run(
@@ -528,6 +560,7 @@ function updateDocument(db, id, payload, userId = null) {
         payload.counterparty !== undefined ? (payload.counterparty ? String(payload.counterparty).trim() : null) : current.counterparty,
         docNo,
         payload.notes !== undefined ? (payload.notes ? String(payload.notes).trim() : null) : current.notes,
+        documentDate,
         requiresResubmit ? 'draft' : current.status,
         requiresResubmit ? null : current.submitted_at,
         requiresResubmit ? null : current.submitted_by,
@@ -552,7 +585,7 @@ function updateDocument(db, id, payload, userId = null) {
 function submitDocument(db, id, userId) {
     const current = getDocumentRow(db, id);
     if (current.status !== 'draft') throw new ConflictError('只有草稿单据允许提交');
-    const now = buildExecutedAt();
+    const now = buildTimestampForDocumentDate(current.document_date);
     db.prepare(`
         UPDATE stock_documents
         SET status = 'submitted', submitted_at = ?, submitted_by = ?, updated_at = datetime('now', 'localtime')
@@ -563,7 +596,7 @@ function submitDocument(db, id, userId) {
 
 function applyExecution(db, document, userId) {
     const config = getDocConfig(document.documentType);
-    const executedAt = buildExecutedAt();
+    const executedAt = buildTimestampForDocumentDate(document.documentDate);
     const isReversal = Boolean(document.isReversal);
 
     document.items.forEach(item => {
@@ -682,7 +715,7 @@ function postDocument(db, id, userId) {
     const current = getDocumentRow(db, id);
     if (current.status !== 'executed') throw new ConflictError('只有已执行单据允许记账');
     if (current.reversed_by_document_id) throw new ConflictError('原单已生成红冲单，不能再直接记账或反向流转');
-    const now = buildExecutedAt();
+    const now = buildTimestampForDocumentDate(current.document_date);
     db.prepare(`
         UPDATE stock_documents
         SET status = 'posted', posted_at = ?, posted_by = ?, updated_at = datetime('now', 'localtime')
@@ -921,6 +954,100 @@ function reverseDocument(db, id, userId, reason = '') {
     return getDocumentById(db, reversal.id);
 }
 
+function correctDocument(db, id, userId, reason = '') {
+    const original = getDocumentById(db, id);
+    const normalizedReason = String(reason || '').trim();
+    if (!['executed', 'posted'].includes(original.documentStatus)) {
+        throw new ConflictError('只有已执行或已记账单据允许更正');
+    }
+    if (original.isReversal) throw new ConflictError('红冲单不允许发起更正');
+    if (original.reversedByDocumentId) throw new ConflictError('该单据已生成红冲单，不能重复更正');
+    if (!normalizedReason) throw new ValidationError('更正原因不能为空', 'reason');
+
+    const postedDocument = original.documentStatus === 'executed'
+        ? postDocument(db, id, userId)
+        : original;
+    const reversalDocument = reverseDocument(db, id, userId, normalizedReason);
+    const correctionPayload = {
+        docType: postedDocument.documentType,
+        warehouseId: postedDocument.warehouseId,
+        toWarehouseId: postedDocument.toWarehouseId,
+        counterparty: postedDocument.counterparty,
+        documentDate: postedDocument.documentDate,
+        originType: postedDocument.originType,
+        originId: postedDocument.originId,
+        notes: [
+            postedDocument.notes,
+            `更正原单 ${postedDocument.documentNo}`,
+            `原因: ${normalizedReason}`
+        ].filter(Boolean).join(' | '),
+        items: postedDocument.items.map(item => ({
+            materialId: item.materialId,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            actualQuantity: postedDocument.documentType === 'count_execution' ? item.actualQuantity : undefined,
+            notes: item.notes
+        }))
+    };
+    const correctionDraft = createDocument(db, correctionPayload, userId, 'draft');
+
+    appendDocumentRevision(db, {
+        documentId: correctionDraft.id,
+        fromStatus: null,
+        toStatus: correctionDraft.documentStatus,
+        editedBy: userId,
+        changeReason: `更正原单 ${postedDocument.documentNo}: ${normalizedReason}`,
+        beforeSnapshot: null,
+        afterSnapshot: correctionDraft
+    });
+
+    return {
+        originalDocument: getDocumentById(db, id),
+        postedDocument,
+        reversalDocument,
+        correctionDraft
+    };
+}
+
+function duplicateDocumentDraft(db, id, userId) {
+    const original = getDocumentById(db, id);
+    if (original.documentStatus === 'voided') throw new ConflictError('已作废单据不能复制为新单');
+    if (original.isReversal) throw new ConflictError('红冲单不能复制为新单');
+
+    const duplicatePayload = {
+        docType: original.documentType,
+        warehouseId: original.warehouseId,
+        toWarehouseId: original.toWarehouseId,
+        counterparty: original.counterparty,
+        originType: original.originType,
+        originId: original.originId,
+        notes: [original.notes, `复制自单据 ${original.documentNo}`].filter(Boolean).join(' | '),
+        items: original.items.map(item => ({
+            materialId: item.materialId,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            actualQuantity: original.documentType === 'count_execution' ? item.actualQuantity : undefined,
+            notes: item.notes
+        }))
+    };
+    const draft = createDocument(db, duplicatePayload, userId, 'draft');
+
+    appendDocumentRevision(db, {
+        documentId: draft.id,
+        fromStatus: null,
+        toStatus: draft.documentStatus,
+        editedBy: userId,
+        changeReason: `复制自单据 ${original.documentNo}`,
+        beforeSnapshot: null,
+        afterSnapshot: draft
+    });
+
+    return {
+        originalDocument: original,
+        draft
+    };
+}
+
 module.exports = {
     DOC_CONFIG,
     createDocument,
@@ -929,6 +1056,8 @@ module.exports = {
     executeDocument,
     postDocument,
     reverseDocument,
+    correctDocument,
+    duplicateDocumentDraft,
     unexecuteDocument,
     discardDraftDocument,
     voidDocument,

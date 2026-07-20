@@ -265,22 +265,34 @@ async function parseInventoryWorkbook(file) {
             if (value !== null && value !== undefined && String(value).trim() !== '') hasValue = true;
         });
         if (!hasValue) continue;
-        rows.push({
-            rowNumber,
-            code: trimText(record['商品编号']),
-            name: trimText(record['商品名称']),
-            spec: trimText(record['规格']),
-            brand: trimText(record['品牌']),
-            unit: normalizeMaterialUnit(trimText(record['基本单位']) || trimText(record['明细--单位']) || 'PCS', 'PCS'),
-            categoryName: mapInventoryWorkbookCategory(record),
-            costPrice: parseNumberField(record['成本均价'] ?? record['参考成本价'] ?? record['库存金额'], '成本均价'),
-            salePrice: parseNumberField(record['零售价'] ?? record['预设售价1'], '零售价'),
-            inventoryQty: parseNumberField(record['账面库存'] ?? record['仓内库存'], '账面库存'),
-            raw: record
-        });
+        try {
+            rows.push({
+                rowNumber,
+                code: trimText(record['商品编号']),
+                name: trimText(record['商品名称']),
+                spec: trimText(record['规格']),
+                brand: trimText(record['品牌']),
+                unit: normalizeMaterialUnit(trimText(record['基本单位']) || trimText(record['明细--单位']) || 'PCS', 'PCS'),
+                categoryName: mapInventoryWorkbookCategory(record),
+                costPrice: parseNumberField(record['成本均价'] ?? record['参考成本价'] ?? record['库存金额'], '成本均价'),
+                salePrice: parseNumberField(record['零售价'] ?? record['预设售价1'], '零售价'),
+                inventoryQty: parseNumberField(record['账面库存'] ?? record['仓内库存'], '账面库存'),
+                raw: record,
+                parseErrors: []
+            });
+        } catch (error) {
+            rows.push({
+                rowNumber,
+                code: trimText(record['商品编号']),
+                name: trimText(record['商品名称']),
+                unit: normalizeMaterialUnit(trimText(record['基本单位']) || trimText(record['明细--单位']) || 'PCS', 'PCS'),
+                raw: record,
+                parseErrors: [error.message || '数据格式错误']
+            });
+        }
     }
 
-    return rows.filter(item => item.code || item.name);
+    return rows.filter(item => item.code || item.name || item.parseErrors?.length);
 }
 
 function mapSupplierPricePlatform(value) {
@@ -326,32 +338,45 @@ async function parseSupplierPriceWorkbook(file) {
         });
         if (!hasValue) continue;
 
-        const quotedPrice = parseNumberField(record['指定折前单价'], '指定折前单价');
-        const quotedDiscount = parseNumberField(record['指定折扣(0.9为9折)'], '指定折扣');
-        const lastPurchasePrice = parseNumberField(record['最近采购折前价格'], '最近采购折前价格');
-        const lastPurchaseDiscount = parseNumberField(record['最近采购折扣'], '最近采购折扣');
-        rows.push({
-            rowNumber,
-            supplierCode: trimText(record['往来单位编号']),
-            supplierName: trimText(record['往来单位名称']),
-            materialCode: trimText(record['商品编号']),
-            materialName: trimText(record['商品名称']),
-            unit: normalizeMaterialUnit(record['单位']),
-            spec: trimText(record['规格']),
-            model: trimText(record['型号']),
-            quotedPrice,
-            quotedDiscount: quotedDiscount == null ? 1 : quotedDiscount,
-            effectivePrice: quotedPrice == null ? null : Number((quotedPrice * (quotedDiscount == null ? 1 : quotedDiscount)).toFixed(4)),
-            lastPurchasePrice,
-            lastPurchaseDiscount: lastPurchaseDiscount == null ? 1 : lastPurchaseDiscount,
-            lastPurchaseEffectivePrice: lastPurchasePrice == null ? null : Number((lastPurchasePrice * (lastPurchaseDiscount == null ? 1 : lastPurchaseDiscount)).toFixed(4)),
-            lastPurchaseAt: trimText(record['最近采购时间']),
-            sourcePlatform: mapSupplierPricePlatform(record['往来单位名称']),
-            raw: record
-        });
+        try {
+            const quotedPrice = parseNumberField(record['指定折前单价'], '指定折前单价');
+            const quotedDiscount = parseNumberField(record['指定折扣(0.9为9折)'], '指定折扣');
+            const lastPurchasePrice = parseNumberField(record['最近采购折前价格'], '最近采购折前价格');
+            const lastPurchaseDiscount = parseNumberField(record['最近采购折扣'], '最近采购折扣');
+            rows.push({
+                rowNumber,
+                supplierCode: trimText(record['往来单位编号']),
+                supplierName: trimText(record['往来单位名称']),
+                materialCode: trimText(record['商品编号']),
+                materialName: trimText(record['商品名称']),
+                unit: normalizeMaterialUnit(record['单位']),
+                spec: trimText(record['规格']),
+                model: trimText(record['型号']),
+                quotedPrice,
+                quotedDiscount: quotedDiscount == null ? 1 : quotedDiscount,
+                effectivePrice: quotedPrice == null ? null : Number((quotedPrice * (quotedDiscount == null ? 1 : quotedDiscount)).toFixed(4)),
+                lastPurchasePrice,
+                lastPurchaseDiscount: lastPurchaseDiscount == null ? 1 : lastPurchaseDiscount,
+                lastPurchaseEffectivePrice: lastPurchasePrice == null ? null : Number((lastPurchasePrice * (lastPurchaseDiscount == null ? 1 : lastPurchaseDiscount)).toFixed(4)),
+                lastPurchaseAt: trimText(record['最近采购时间']),
+                sourcePlatform: mapSupplierPricePlatform(record['往来单位名称']),
+                raw: record,
+                parseErrors: []
+            });
+        } catch (error) {
+            rows.push({
+                rowNumber,
+                supplierCode: trimText(record['往来单位编号']),
+                supplierName: trimText(record['往来单位名称']),
+                materialCode: trimText(record['商品编号']),
+                materialName: trimText(record['商品名称']),
+                raw: record,
+                parseErrors: [error.message || '数据格式错误']
+            });
+        }
     }
 
-    return rows.filter(item => item.supplierName && (item.materialCode || item.materialName));
+    return rows.filter(item => item.supplierName || item.materialCode || item.materialName || item.parseErrors?.length);
 }
 
 function getDefaultMaterialType(categoryId, fallback = 'raw') {
@@ -1314,7 +1339,7 @@ router.get('/search-options', (req, res) => {
 
     const items = db.prepare(`
         SELECT m.id, m.code, m.name, m.spec, m.brand, m.unit, m.material_type, m.lifecycle_status, m.supply_mode,
-               m.sale_price, m.cost_price, m.min_stock, m.safety_stock,
+               m.sale_price, m.cost_price, m.standard_cost, m.avg_cost, m.last_purchase_price, m.min_stock, m.safety_stock,
                COALESCE(inv.total_stock, 0) as total_stock
         FROM materials m
         LEFT JOIN (
@@ -1365,12 +1390,28 @@ router.post('/import/preview', requirePermission('materials', 'add'), upload.sin
         const seenCodes = new Set();
 
         records.forEach((row, index) => {
-            const normalized = normalizeImportRecord(row);
+            const rowNumber = index + 2;
+            let normalized;
+            try {
+                normalized = normalizeImportRecord(row);
+            } catch (error) {
+                items.push({
+                    row: rowNumber,
+                    action: 'invalid',
+                    code: null,
+                    name: null,
+                    normalized: null,
+                    warnings: [],
+                    errors: [error.message || '数据格式错误']
+                });
+                summary.invalid++;
+                return;
+            }
             const existing = normalized.code
                 ? db.prepare('SELECT id, code, name FROM materials WHERE code = ?').get(normalized.code)
                 : null;
             const previewItem = {
-                row: index + 2,
+                row: rowNumber,
                 action: existing ? 'update' : 'create',
                 code: normalized.code,
                 name: normalized.name,
@@ -1430,16 +1471,16 @@ router.post('/import/preview', requirePermission('materials', 'add'), upload.sin
 
 router.post('/import/commit', requirePermission('materials', 'add'), (req, res) => {
     cleanupExpiredPreviews();
-    const { previewToken, mode = 'all_or_nothing' } = req.body;
+    const { previewToken, mode = 'best_effort' } = req.body;
     if (!previewToken) throw new ValidationError('缺少 previewToken');
     const preview = importPreviewStore.get(previewToken);
     if (!preview || preview.createdBy !== req.session.user.id) {
         throw new ValidationError('导入预览已失效，请重新上传文件');
     }
-    if (mode !== 'all_or_nothing') throw new ValidationError('当前仅支持 all_or_nothing 模式');
+    if (!['best_effort', 'all_or_nothing'].includes(mode)) throw new ValidationError('不支持的导入模式');
 
     const invalidItems = preview.items.filter(item => item.action === 'invalid');
-    if (invalidItems.length > 0) {
+    if (mode === 'all_or_nothing' && invalidItems.length > 0) {
         throw new ValidationError(`存在 ${invalidItems.length} 条无效数据，无法提交`);
     }
 
@@ -1449,10 +1490,16 @@ router.post('/import/commit', requirePermission('materials', 'add'), (req, res) 
         categoryCache[item.name] = item.id;
     });
 
-    const doCommit = db.transaction(() => {
-        let imported = 0;
-        let updated = 0;
-        preview.items.forEach(item => {
+    let imported = 0;
+    let updated = 0;
+    const errors = invalidItems.map(item => ({
+        row: item.row,
+        code: item.code || null,
+        name: item.name || null,
+        reason: item.errors.join('；') || '无效数据'
+    }));
+
+    const commitItem = db.transaction((item) => {
             const row = item.normalized;
             let categoryId = null;
             if (row.categoryName) {
@@ -1539,7 +1586,7 @@ router.post('/import/commit', requirePermission('materials', 'add'), (req, res) 
                         VALUES (?, ?, ?, ?, ?)
                     `).run(item.materialId, current.lifecycle_status, nextLifecycleStatus, '导入更新', req.session.user.id);
                 }
-                updated++;
+                return 'updated';
             } else {
                 const materialCode = row.code || generateMaterialCode(db);
                 const materialType = row.materialType || 'raw';
@@ -1575,20 +1622,52 @@ router.post('/import/commit', requirePermission('materials', 'add'), (req, res) 
                         VALUES (?, ?, ?, ?, ?)
                     `).run(result.lastInsertRowid, 'draft', lifecycleStatus, '导入创建', req.session.user.id);
                 }
-                imported++;
+                return 'imported';
             }
-        });
-        return { imported, updated, failed: 0, total: preview.items.length };
     });
 
-    const result = doCommit();
+    const validItems = preview.items.filter(item => item.action !== 'invalid');
+    if (mode === 'all_or_nothing') {
+        const commitAll = db.transaction(() => validItems.map(item => commitItem(item)));
+        commitAll().forEach(action => {
+            if (action === 'imported') imported++;
+            if (action === 'updated') updated++;
+        });
+    } else {
+        validItems.forEach(item => {
+            try {
+                const action = commitItem(item);
+                if (action === 'imported') imported++;
+                if (action === 'updated') updated++;
+            } catch (error) {
+                const categoryName = item.normalized?.categoryName;
+                if (categoryName && !db.prepare('SELECT id FROM categories WHERE name = ?').get(categoryName)) {
+                    delete categoryCache[categoryName];
+                }
+                errors.push({
+                    row: item.row,
+                    code: item.code || null,
+                    name: item.name || null,
+                    reason: error.message || '写入失败'
+                });
+            }
+        });
+    }
+    const result = {
+        imported,
+        updated,
+        failed: errors.length,
+        skipped: errors.length,
+        total: preview.items.length,
+        errors: errors.slice(0, 100)
+    };
     importPreviewStore.delete(previewToken);
 
     logOperation({
         userId: req.session.user.id,
         action: 'import',
         resource: 'materials',
-        detail: `物料导入提交：新增 ${result.imported}，更新 ${result.updated}，共 ${result.total} 条`,
+        detail: `物料导入提交：新增 ${result.imported}，更新 ${result.updated}，跳过 ${result.skipped}，共 ${result.total} 条`,
         ip: req.ip
     });
 
@@ -1623,7 +1702,7 @@ router.post('/import/inventory-workbook/preview', requirePermission('materials',
             warehouseId: activeWarehouse.id,
             warehouseName: activeWarehouse.name,
             warnings: [],
-            errors: []
+            errors: [...(row.parseErrors || [])]
         };
 
         if (!row.name) item.errors.push('商品名称不能为空');
@@ -1679,9 +1758,7 @@ router.post('/import/inventory-workbook/commit', requirePermission('materials', 
     }
 
     const invalidItems = preview.items.filter(item => item.action === 'invalid');
-    if (invalidItems.length > 0) {
-        throw new ValidationError(`存在 ${invalidItems.length} 条无效数据，无法提交`);
-    }
+    const validItems = preview.items.filter(item => item.action !== 'invalid');
 
     const db = getDB();
     const finalWarehouseId = Number(warehouseId || preview.items[0]?.warehouseId || 0);
@@ -1694,7 +1771,7 @@ router.post('/import/inventory-workbook/commit', requirePermission('materials', 
         let updated = 0;
         let stockUpdated = 0;
 
-        preview.items.forEach(item => {
+        validItems.forEach(item => {
             const row = item.normalized;
             let categoryId = null;
             if (row.categoryName) {
@@ -1780,6 +1857,14 @@ router.post('/import/inventory-workbook/commit', requirePermission('materials', 
             imported,
             updated,
             stockUpdated,
+            skipped: invalidItems.length,
+            failed: invalidItems.length,
+            errors: invalidItems.slice(0, 100).map(item => ({
+                row: item.row,
+                code: item.code || null,
+                name: item.name || null,
+                reason: item.errors.join('；') || '无效数据'
+            })),
             warehouseName: warehouse.name
         };
     });
@@ -1791,7 +1876,7 @@ router.post('/import/inventory-workbook/commit', requirePermission('materials', 
         userId: req.session.user.id,
         action: 'import',
         resource: 'materials',
-        detail: `导入库存状况表：新增 ${result.imported}，更新 ${result.updated}，库存同步 ${result.stockUpdated}，仓库 ${result.warehouseName}`,
+        detail: `导入库存状况表：新增 ${result.imported}，更新 ${result.updated}，跳过 ${result.skipped}，库存同步 ${result.stockUpdated}，仓库 ${result.warehouseName}`,
         ip: req.ip
     });
 
@@ -1828,7 +1913,7 @@ router.post('/import/supplier-price-workbook/preview', requirePermission('materi
             materialName: row.materialName,
             normalized: row,
             warnings: [],
-            errors: []
+            errors: [...(row.parseErrors || [])]
         };
 
         if (!row.supplierName) previewItem.errors.push('往来单位名称不能为空');
@@ -1889,9 +1974,7 @@ router.post('/import/supplier-price-workbook/commit', requirePermission('materia
     }
 
     const invalidItems = preview.items.filter(item => item.action === 'invalid' || item.action === 'unmatched');
-    if (invalidItems.length > 0) {
-        throw new ValidationError(`存在 ${invalidItems.length} 条未匹配或无效数据，无法提交`);
-    }
+    const validItems = preview.items.filter(item => item.action !== 'invalid' && item.action !== 'unmatched');
 
     const db = getDB();
     const doCommit = db.transaction(() => {
@@ -1899,7 +1982,7 @@ router.post('/import/supplier-price-workbook/commit', requirePermission('materia
         let updated = 0;
         let supplierLinksCreated = 0;
 
-        preview.items.forEach(item => {
+        validItems.forEach(item => {
             const row = item.normalized;
             const materialId = Number(item.materialId);
             const quotedDiscount = row.quotedDiscount == null ? 1 : Number(row.quotedDiscount);
@@ -1984,7 +2067,20 @@ router.post('/import/supplier-price-workbook/commit', requirePermission('materia
             }
         });
 
-        return { total: preview.items.length, imported, updated, supplierLinksCreated };
+        return {
+            total: preview.items.length,
+            imported,
+            updated,
+            supplierLinksCreated,
+            skipped: invalidItems.length,
+            failed: invalidItems.length,
+            errors: invalidItems.slice(0, 100).map(item => ({
+                row: item.row,
+                code: item.materialCode || null,
+                name: item.materialName || null,
+                reason: item.errors.join('；') || '未匹配或无效数据'
+            }))
+        };
     });
 
     const result = doCommit();
@@ -1994,7 +2090,7 @@ router.post('/import/supplier-price-workbook/commit', requirePermission('materia
         userId: req.session.user.id,
         action: 'import',
         resource: 'materials',
-        detail: `导入供应商价格本：新增 ${result.imported}，更新 ${result.updated}，补充供应商关系 ${result.supplierLinksCreated}`,
+        detail: `导入供应商价格本：新增 ${result.imported}，更新 ${result.updated}，跳过 ${result.skipped}，补充供应商关系 ${result.supplierLinksCreated}`,
         ip: req.ip
     });
 

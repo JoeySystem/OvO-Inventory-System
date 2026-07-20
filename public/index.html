@@ -1314,11 +1314,12 @@
             recentItems: { type: Array, default: () => [] },
             recommendedItems: { type: Array, default: () => [] },
             contextKey: { type: String, default: '' },
+            dropUp: { type: Boolean, default: false },
             limit: { type: Number, default: 12 }
         },
         emits: ['update:modelValue', 'change'],
         template: `
-        <div class="relative">
+        <div ref="rootRef" class="relative">
             <div class="relative">
                 <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"></i>
                 <input ref="inputRef"
@@ -1344,12 +1345,15 @@
                 <div class="text-[11px] text-gray-500 mt-1 break-words">{{ selectedMeta.code }}<span v-if="selectedMeta.spec"> · {{ selectedMeta.spec }}</span><span v-if="selectedMeta.unit"> · {{ selectedMeta.unit }}</span><span v-if="selectedMeta.supply_mode_label"> · {{ selectedMeta.supply_mode_label }}</span><span v-if="selectedMeta.total_stock !== undefined && selectedMeta.total_stock !== null"> · 库存 {{ selectedMeta.total_stock }}</span></div>
                 <div v-if="duplicateNameWarning(selectedMeta)" class="mt-1 text-[11px] text-amber-600">同名物料 {{ duplicateNameCount(selectedMeta.name) }} 项，务必核对编码与规格</div>
             </div>
-            <div v-if="open" class="absolute left-0 right-0 top-full mt-2 z-30 rounded-xl border border-gray-200 bg-white shadow-xl overflow-hidden">
+            <teleport to="body">
+            <div v-if="open"
+                 :style="dropdownStyle"
+                 class="fixed z-[120] rounded-xl border border-gray-200 bg-white shadow-xl overflow-hidden">
                 <div class="px-3 py-2 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
                     <span class="text-[11px] text-gray-500">{{ query.trim() ? '输入名称 / 编码 / 拼音 / 规格快速检索' : '可直接从最近使用或当前场景推荐中选择' }}</span>
                     <span v-if="loading" class="text-[11px] text-indigo-500">搜索中...</span>
                 </div>
-                <div v-if="query.trim() && options.length > 0" class="max-h-72 overflow-y-auto">
+                <div v-if="query.trim() && options.length > 0" class="overflow-y-auto" :style="{ maxHeight: dropdownStyle.maxHeight }">
                     <button v-for="(item, idx) in options"
                             :key="item.id"
                             type="button"
@@ -1379,7 +1383,7 @@
                         </div>
                     </button>
                 </div>
-                <div v-else-if="!query.trim() && (recommendedDisplay.length || recentDisplay.length)" class="max-h-72 overflow-y-auto">
+                <div v-else-if="!query.trim() && (recommendedDisplay.length || recentDisplay.length)" class="overflow-y-auto" :style="{ maxHeight: dropdownStyle.maxHeight }">
                     <div v-if="recommendedDisplay.length" class="border-b border-gray-100">
                         <div class="px-3 py-2 text-[11px] font-medium text-indigo-600 bg-indigo-50/60">当前场景推荐</div>
                         <button v-for="item in recommendedDisplay"
@@ -1441,9 +1445,11 @@
                     {{ query.trim() ? '没有匹配的物料，请换个关键词' : '输入关键词开始搜索物料' }}
                 </div>
             </div>
+            </teleport>
         </div>
         `,
         setup(props, { emit }) {
+            const rootRef = ref(null);
             const inputRef = ref(null);
             const open = ref(false);
             const query = ref('');
@@ -1452,7 +1458,31 @@
             const activeIndex = ref(0);
             const selectedMeta = ref(null);
             const recentIds = ref([]);
+            const panelPosition = ref({ top: 0, left: 0, width: 320, maxHeight: '18rem' });
             let searchTimer = null;
+
+            const dropdownStyle = computed(() => ({
+                top: `${panelPosition.value.top}px`,
+                left: `${panelPosition.value.left}px`,
+                width: `${panelPosition.value.width}px`,
+                maxHeight: panelPosition.value.maxHeight
+            }));
+
+            function updateDropdownPosition() {
+                const anchor = inputRef.value || rootRef.value;
+                if (!anchor) return;
+                const rect = anchor.getBoundingClientRect();
+                const viewportPadding = 12;
+                const width = Math.max(280, Math.min(rect.width, window.innerWidth - viewportPadding * 2));
+                const left = Math.max(viewportPadding, Math.min(rect.left, window.innerWidth - viewportPadding - width));
+                const maxHeight = Math.min(288, Math.max(160, window.innerHeight - rect.bottom - viewportPadding));
+                panelPosition.value = {
+                    top: Math.round(rect.bottom + 8),
+                    left: Math.round(left),
+                    width: Math.round(width),
+                    maxHeight: `${Math.round(maxHeight)}px`
+                };
+            }
 
             const mergedLookupItems = computed(() => {
                 const map = new Map();
@@ -1578,13 +1608,17 @@
                     options.value = [];
                 } finally {
                     loading.value = false;
-                    nextTick(() => lucide.createIcons());
+                    nextTick(() => {
+                        updateDropdownPosition();
+                        lucide.createIcons();
+                    });
                 }
             }
 
             function handleFocus() {
                 if (props.disabled) return;
                 open.value = true;
+                updateDropdownPosition();
                 if (query.value.trim()) {
                     searchMaterials(query.value);
                 } else {
@@ -1595,6 +1629,7 @@
             function handleInput() {
                 if (props.disabled) return;
                 open.value = true;
+                updateDropdownPosition();
                 selectedMeta.value = null;
                 clearTimeout(searchTimer);
                 searchTimer = setTimeout(() => searchMaterials(query.value), 180);
@@ -1639,6 +1674,10 @@
                 }
             }
 
+            function handleViewportChange() {
+                if (open.value) updateDropdownPosition();
+            }
+
             function handleBlur() {
                 setTimeout(() => {
                     closePanel();
@@ -1660,10 +1699,24 @@
 
             watch(() => props.contextKey, loadRecentIds, { immediate: true });
 
-            onMounted(() => nextTick(() => lucide.createIcons()));
+            watch(open, (isOpen) => {
+                if (isOpen) nextTick(updateDropdownPosition);
+            });
+
+            onMounted(() => {
+                window.addEventListener('resize', handleViewportChange);
+                window.addEventListener('scroll', handleViewportChange, true);
+                nextTick(() => lucide.createIcons());
+            });
+
+            onBeforeUnmount(() => {
+                clearTimeout(searchTimer);
+                window.removeEventListener('resize', handleViewportChange);
+                window.removeEventListener('scroll', handleViewportChange, true);
+            });
 
             return {
-                inputRef, open, query, options, loading, activeIndex, selectedMeta, recommendedDisplay, recentDisplay, duplicateNameCount, duplicateNameWarning, lifecycleLabel, isSelectable,
+                rootRef, inputRef, open, query, options, loading, activeIndex, selectedMeta, dropdownStyle, recommendedDisplay, recentDisplay, duplicateNameCount, duplicateNameWarning, lifecycleLabel, isSelectable,
                 handleFocus, handleInput, moveActive, confirmActive, selectItem, clearSelection, closePanel, handleBlur
             };
         }
@@ -2083,21 +2136,18 @@
                                         {{ config.counterpartyLabel }}
                                         <span v-if="config.requireCounterparty" class="text-red-500">*</span>
                                     </label>
-                                    <select v-if="config.useSupplierSelector && supplierOptions.length"
-                                            v-model="form.counterparty"
-                                            class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500">
-                                        <option value="">请选择{{ config.counterpartyLabel }}...</option>
+                                    <input v-model="form.counterparty"
+                                           type="text"
+                                           :list="config.useSupplierSelector ? counterpartyOptionsId : null"
+                                           :placeholder="config.useSupplierSelector ? '可选择已有供应商，也可输入新的供应商 / 来源' : ''"
+                                           class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500">
+                                    <datalist v-if="config.useSupplierSelector && supplierOptions.length" :id="counterpartyOptionsId">
                                         <option v-for="supplier in supplierOptions" :key="supplier.value" :value="supplier.value">
                                             {{ supplier.label }}
                                         </option>
-                                    </select>
-                                    <input v-else
-                                           v-model="form.counterparty"
-                                           type="text"
-                                           :placeholder="config.useSupplierSelector ? '当前物料未维护供应商，可手工填写' : ''"
-                                           class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500">
+                                    </datalist>
                                     <div v-if="config.useSupplierSelector" class="mt-1 text-xs text-gray-400">
-                                        {{ supplierOptions.length ? '已优先带出物料已维护的供应商，可直接选择。' : '当前物料尚未维护供应商记录，需手工填写来源。' }}
+                                        {{ supplierOptions.length ? '可从已维护供应商中选择，也可直接输入新的供应商 / 来源。' : '当前物料尚未维护供应商记录，需手工填写来源。' }}
                                     </div>
                                 </div>
                             </div>
@@ -2106,13 +2156,13 @@
                                     <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                         <div>
                                             <div class="text-sm font-semibold text-emerald-900">本次收货物料明细</div>
-                                            <p class="text-xs text-emerald-700 mt-1">一张收货单可录入多种物料，每行填写数量、单价或总价。</p>
+                                            <p class="text-xs text-emerald-700 mt-1">一张收货单可录入多种物料；当前行物料选择框应直接弹出选项，不需要额外添加空白行。</p>
                                         </div>
                                         <button type="button" @click="addFormItem" class="inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-3 py-2 transition">
-                                            <i data-lucide="plus-circle" class="w-4 h-4"></i> 添加物料
+                                            <i data-lucide="plus-circle" class="w-4 h-4"></i> 添加空白行
                                         </button>
                                     </div>
-                                    <div class="overflow-x-auto rounded-lg border border-emerald-100 bg-white">
+                                    <div class="overflow-x-auto rounded-lg border border-emerald-100 bg-white" :class="form.items.length <= 1 ? 'pb-72' : 'pb-2'">
                                         <table class="w-full min-w-[820px]">
                                             <thead class="bg-emerald-50">
                                                 <tr>
@@ -2130,13 +2180,14 @@
                                                         <material-search-select v-model="item.materialId"
                                                                                 :initial-items="materials"
                                                                                 placeholder="搜索名称 / 编码 / 拼音 / 规格"
-                                                                                @change="onFormItemMaterialChange(idx)" />
+                                                                                :drop-up="idx === form.items.length - 1"
+                                                                                @change="onFormItemMaterialChange(idx, $event)" />
                                                     </td>
                                                     <td class="px-3 py-2">
                                                         <input v-model.number="item.quantity" @input="handleItemQuantityInput(item)" type="number" min="1" required class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm text-center outline-none focus:ring-1 focus:ring-emerald-500">
                                                     </td>
                                                     <td class="px-3 py-2">
-                                                        <input v-model.number="item.unitPrice" @input="handleItemUnitPriceInput(item)" type="number" min="0" step="0.01" class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm text-center outline-none focus:ring-1 focus:ring-emerald-500">
+                                                        <input v-model.number="item.unitPrice" @input="handleItemUnitPriceInput(item)" type="number" min="0" step="0.01" placeholder="自动带出，可改" class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm text-center outline-none focus:ring-1 focus:ring-emerald-500">
                                                     </td>
                                                     <td class="px-3 py-2">
                                                         <input v-model.number="item.totalPrice" @input="handleItemTotalPriceInput(item)" type="number" min="0" step="0.01" placeholder="可反算单价" class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm text-center font-semibold text-gray-800 outline-none focus:ring-1 focus:ring-emerald-500">
@@ -2187,8 +2238,17 @@
                                 <div class="text-xs text-gray-400 -mt-1">支持双向联动：输入数量 + 单价自动计算总价，输入数量 + 总价也会自动反算单价。</div>
                             </template>
                             <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-1">单据号 / 关联单号</label>
-                                <input v-model="form.referenceNo" type="text" placeholder="留空则自动生成轻量单据号" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500">
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">单据日期</label>
+                                        <input v-model="form.documentDate" type="date" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500">
+                                        <div class="mt-1 text-xs text-gray-400">可不选，默认按今天记录；备注仍可继续填写其它说明。</div>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">单据号 / 关联单号</label>
+                                        <input v-model="form.referenceNo" type="text" placeholder="留空则自动生成轻量单据号" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500">
+                                    </div>
+                                </div>
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">备注</label>
@@ -2238,6 +2298,7 @@
                             <div v-if="lastSubmittedDoc" class="mt-3 space-y-2">
                                 <div class="text-xs text-indigo-500">最近创建或流转的单据</div>
                                 <div class="text-sm text-indigo-700">单据号：<span class="font-mono font-semibold">{{ lastSubmittedDoc.documentNo }}</span></div>
+                                <div class="text-sm text-indigo-700">单据日期：{{ lastSubmittedDoc.documentDate || '-' }}</div>
                                 <div class="text-sm text-indigo-700">单据类型：{{ lastSubmittedDoc.documentType }}</div>
                                 <div class="text-sm text-indigo-700">单据状态：{{ formatDocumentStatus(lastSubmittedDoc.documentStatus) }}</div>
                                 <div class="overflow-hidden rounded-lg border border-indigo-100 bg-white mt-3">
@@ -2369,7 +2430,7 @@
                                     <th class="text-left px-3 py-2 text-xs text-gray-500">仓库</th>
                                     <th class="text-right px-3 py-2 text-xs text-gray-500">数量</th>
                                     <th class="text-left px-3 py-2 text-xs text-gray-500">{{ config.counterpartyLabel }}</th>
-                                    <th class="text-left px-3 py-2 text-xs text-gray-500">执行时间</th>
+                                    <th class="text-left px-3 py-2 text-xs text-gray-500">单据日期</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-100">
@@ -2387,7 +2448,7 @@
                                     <td class="px-3 py-2 text-sm text-gray-500">{{ doc.warehouseName }}</td>
                                     <td class="px-3 py-2 text-sm text-right font-medium">{{ doc.quantity }} {{ doc.unit || '' }}</td>
                                     <td class="px-3 py-2 text-sm text-gray-500">{{ doc.counterparty || '-' }}</td>
-                                    <td class="px-3 py-2 text-xs text-gray-400">{{ $formatDateTime(doc.executedAt) }}</td>
+                                    <td class="px-3 py-2 text-xs text-gray-400">{{ doc.documentDate || $formatDateTime(doc.executedAt) }}</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -2420,6 +2481,7 @@
                         <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                             <div class="rounded-lg bg-white border border-violet-100 px-3 py-2"><span class="text-violet-500 text-xs block">单据号</span><span class="font-mono text-violet-800">{{ selectedDocument.documentNo }}</span></div>
                             <div class="rounded-lg bg-white border border-violet-100 px-3 py-2"><span class="text-violet-500 text-xs block">单据状态</span><span class="text-violet-800">{{ formatDocumentStatus(selectedDocument.documentStatus) }}</span></div>
+                            <div class="rounded-lg bg-white border border-violet-100 px-3 py-2"><span class="text-violet-500 text-xs block">单据日期</span><span class="text-violet-800">{{ selectedDocument.documentDate || '-' }}</span></div>
                             <div class="rounded-lg bg-white border border-violet-100 px-3 py-2"><span class="text-violet-500 text-xs block">物料</span><span class="text-violet-800">{{ selectedDocument.materialName }}<span v-if="selectedDocument.materialCode" class="text-violet-400 ml-1">({{ selectedDocument.materialCode }})</span></span></div>
                             <div class="rounded-lg bg-white border border-violet-100 px-3 py-2"><span class="text-violet-500 text-xs block">仓库</span><span class="text-violet-800">{{ selectedDocument.warehouseName }}</span></div>
                             <div class="rounded-lg bg-white border border-violet-100 px-3 py-2"><span class="text-violet-500 text-xs block">数量</span><span class="text-violet-800">{{ selectedDocument.quantity }} {{ selectedDocument.unit || '' }}</span></div>
@@ -2531,6 +2593,7 @@
                     totalPrice: null,
                     items: config.multiItem ? [createEmptyFormItem()] : [],
                     counterparty: '',
+                    documentDate: formatDateInput(new Date()),
                     referenceNo: '',
                     notes: ''
                 });
@@ -2550,6 +2613,7 @@
                 const activePagination = computed(() => viewMode.value === 'documents' ? documentPagination.value : movementPagination.value);
                 const activeLoading = computed(() => viewMode.value === 'documents' ? loadingDocuments.value : loadingMovements.value);
                 const canExecute = computed(() => canAction ? canAction(config.permissionResource || 'warehouses', 'edit') : false);
+                const counterpartyOptionsId = `counterparty-options-${config.type || config.docType || 'stock'}`;
                 const formTotalPrice = computed(() => {
                     if (form.value.totalPrice === null || form.value.totalPrice === '' || Number.isNaN(Number(form.value.totalPrice))) {
                         return null;
@@ -2630,6 +2694,26 @@
                     return roundMoney(numeric);
                 }
 
+                function pickMaterialPurchasePrice(material, detailData = null) {
+                    const candidates = [
+                        material?.last_purchase_price,
+                        material?.lastPurchasePrice,
+                        detailData?.material?.last_purchase_price,
+                        detailData?.material?.lastPurchasePrice,
+                        ...(detailData?.suppliers || []).map(item => item.last_purchase_price ?? item.lastPurchasePrice),
+                        ...(detailData?.supplierPrices || []).map(item => item.effective_price ?? item.effectivePrice ?? item.unit_price ?? item.unitPrice),
+                        material?.cost_price,
+                        material?.costPrice,
+                        detailData?.material?.cost_price,
+                        detailData?.material?.costPrice
+                    ];
+                    for (const candidate of candidates) {
+                        const price = normalizeMoneyInput(candidate);
+                        if (price !== null && price > 0) return price;
+                    }
+                    return null;
+                }
+
                 function createEmptyFormItem(overrides = {}) {
                     return {
                         uid: `receive-item-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -2698,9 +2782,27 @@
                     }
                 }
 
-                async function onFormItemMaterialChange(index) {
+                async function onFormItemMaterialChange(index, selectedMaterial = null) {
+                    const row = form.value.items?.[index];
+                    if (!row) return;
+                    let detailData = null;
+                    if (row.materialId && config.useSupplierSelector) {
+                        try {
+                            detailData = await api.get('/api/materials/' + row.materialId);
+                        } catch (e) {
+                            console.error(e);
+                        }
+                    }
+                    if (selectedMaterial && row.materialId && normalizeMoneyInput(row.unitPrice) === null && normalizeMoneyInput(row.totalPrice) === null) {
+                        const price = pickMaterialPurchasePrice(selectedMaterial, detailData);
+                        if (price !== null) {
+                            row.unitPrice = price;
+                            row.lastPriceEditedField = 'unitPrice';
+                            syncItemTotalPriceFromUnitPrice(row);
+                        }
+                    }
                     if (index === 0) {
-                        await loadMaterialCounterpartyOptions(form.value.items?.[0]?.materialId || '');
+                        await loadMaterialCounterpartyOptions(form.value.items?.[0]?.materialId || '', detailData);
                         await refreshSnapshot();
                     }
                 }
@@ -2867,11 +2969,11 @@
                     }
                 }
 
-                async function loadMaterialCounterpartyOptions(materialId = form.value.materialId) {
+                async function loadMaterialCounterpartyOptions(materialId = form.value.materialId, existingDetailData = null) {
                     selectedMaterialSuppliers.value = [];
                     if (!config.useSupplierSelector || !materialId) return;
                     try {
-                        const detailData = await api.get('/api/materials/' + materialId);
+                        const detailData = existingDetailData || await api.get('/api/materials/' + materialId);
                         const combined = [
                             ...(detailData.suppliers || []),
                             ...(detailData.supplierPrices || [])
@@ -2921,6 +3023,7 @@
                         docType: config.docType,
                         warehouseId: Number(form.value.warehouseId),
                         counterparty: String(form.value.counterparty || '').trim(),
+                        documentDate: form.value.documentDate || '',
                         referenceNo: form.value.referenceNo,
                         notes: form.value.notes,
                         items
@@ -3069,6 +3172,7 @@
                         totalPrice: null,
                         items: config.multiItem ? [createEmptyFormItem()] : [],
                         counterparty: '',
+                        documentDate: formatDateInput(new Date()),
                         referenceNo: '',
                         notes: ''
                     };
@@ -3123,6 +3227,7 @@
                         totalPrice: document.items?.[0]?.totalPrice ?? ((document.items?.[0]?.unitPrice ?? null) !== null ? roundMoney(Number(document.items?.[0]?.quantity || 0) * Number(document.items?.[0]?.unitPrice || 0)) : null),
                         items: config.multiItem ? (documentItems.length ? documentItems : [createEmptyFormItem()]) : [],
                         counterparty: document.counterparty || '',
+                        documentDate: document.documentDate || (document.executedAt || document.submittedAt || '').slice(0, 10) || formatDateInput(new Date()),
                         referenceNo: document.documentNo || '',
                         notes: document.notes || ''
                     };
@@ -3288,7 +3393,7 @@
 
                 return {
                     config, warehouses, materials, stockSnapshot, lastSubmittedDoc, editingDocumentId, selectedDocument, viewMode, movementItems, movementSummary, movementPagination, documentPagination, loadingMovements, loadingDocuments, activePagination, activeLoading, canExecute,
-                    documentItems, documentStatusCards, totalMovementQuantity, rangeLabel, filterSummaryLabel, filters, form, formError, submitting, saveDraft, submitDocumentForm, submitAndPostDocumentForm, changeDocumentStatus, editDraftDocument, formatDocumentStatus, documentStatusClass, resetForm, applyFilters, resetFilters, changePage, setViewMode, selectDocument, exportMovements, exportDocument, printDocument, formTotalPrice, supplierOptions, handleUnitPriceInput, handleTotalPriceInput, handleQuantityInput,
+                    documentItems, documentStatusCards, totalMovementQuantity, rangeLabel, filterSummaryLabel, filters, form, formError, submitting, saveDraft, submitDocumentForm, submitAndPostDocumentForm, changeDocumentStatus, editDraftDocument, formatDocumentStatus, documentStatusClass, resetForm, applyFilters, resetFilters, changePage, setViewMode, selectDocument, exportMovements, exportDocument, printDocument, formTotalPrice, supplierOptions, counterpartyOptionsId, handleUnitPriceInput, handleTotalPriceInput, handleQuantityInput,
                     formItemCount, formQuantityTotal, formAmountTotal, addFormItem, removeFormItem, onFormItemMaterialChange, handleItemQuantityInput, handleItemUnitPriceInput, handleItemTotalPriceInput
                 };
             }
@@ -5672,21 +5777,32 @@
 	                            <p class="text-sm text-emerald-800" v-if="importMode === 'standard'">
 	                                <span class="font-semibold">导入完成!</span>
 	                                共 {{ importResult.total }} 条，新增 <span class="font-bold text-emerald-700">{{ importResult.imported }}</span> 条，
-	                                更新 <span class="font-bold text-blue-700">{{ importResult.updated }}</span> 条
+	                                更新 <span class="font-bold text-blue-700">{{ importResult.updated }}</span> 条，
+                                    跳过 <span class="font-bold text-amber-700">{{ importResult.skipped || 0 }}</span> 条
 	                            </p>
                                 <p class="text-sm text-emerald-800" v-else-if="importMode === 'inventoryWorkbook'">
                                     <span class="font-semibold">库存状况表导入完成!</span>
                                     共 {{ importResult.total }} 条，新增 <span class="font-bold text-emerald-700">{{ importResult.imported }}</span> 条，
                                     更新 <span class="font-bold text-blue-700">{{ importResult.updated }}</span> 条，
-                                    同步库存 <span class="font-bold text-indigo-700">{{ importResult.stockUpdated }}</span> 条
+                                    同步库存 <span class="font-bold text-indigo-700">{{ importResult.stockUpdated }}</span> 条，
+                                    跳过 <span class="font-bold text-amber-700">{{ importResult.skipped || 0 }}</span> 条
                                 </p>
                                 <p class="text-sm text-emerald-800" v-else>
                                     <span class="font-semibold">供应商价格本导入完成!</span>
                                     共 {{ importResult.total }} 条，新增 <span class="font-bold text-emerald-700">{{ importResult.imported }}</span> 条，
                                     更新 <span class="font-bold text-blue-700">{{ importResult.updated }}</span> 条，
-                                    补充供应商关系 <span class="font-bold text-indigo-700">{{ importResult.supplierLinksCreated || 0 }}</span> 条
+                                    补充供应商关系 <span class="font-bold text-indigo-700">{{ importResult.supplierLinksCreated || 0 }}</span> 条，
+                                    跳过 <span class="font-bold text-amber-700">{{ importResult.skipped || 0 }}</span> 条
                                 </p>
 	                        </div>
+                            <div v-if="importResult.errors && importResult.errors.length"
+                                 class="bg-amber-50 border border-amber-200 rounded-lg p-3 max-h-40 overflow-y-auto">
+                                <div class="text-xs font-medium text-amber-800 mb-1">跳过原因（最多显示 100 条）</div>
+                                <div v-for="item in importResult.errors" :key="'import-error-' + item.row + '-' + (item.code || item.name || '')"
+                                     class="text-xs text-amber-700">
+                                    第 {{ item.row }} 行<span v-if="item.code || item.name">（{{ item.code || item.name }}）</span>：{{ item.reason }}
+                                </div>
+                            </div>
 	                    </div>
 
                     <div v-if="importError" class="bg-red-50 text-red-600 text-sm rounded-lg px-3 py-2 mb-4">{{ importError }}</div>
@@ -6574,7 +6690,7 @@
 	                            ? { previewToken: importPreviewToken.value }
 	                            : (isSupplierPriceWorkbook
 	                                ? { previewToken: importPreviewToken.value }
-	                                : { previewToken: importPreviewToken.value, mode: 'all_or_nothing' });
+	                                : { previewToken: importPreviewToken.value, mode: 'best_effort' });
 	                        const data = await api.post(commitUrl, commitPayload);
 	                        importResult.value = data;
 	                        importPreviewToken.value = '';
@@ -10759,6 +10875,14 @@
                                         type="button"
                                         @click="changeDocumentStatus(selectedDocument, 'reverse')"
                                         class="text-xs px-3 py-1.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 transition">红冲</button>
+                                <button v-if="['executed', 'posted'].includes(selectedDocument.documentStatus) && !selectedDocument.isReversal && !selectedDocument.reversedByDocumentId && config.editRoutePath"
+                                        type="button"
+                                        @click="correctDocument(selectedDocument)"
+                                        class="text-xs px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-100 transition">更正单据</button>
+                                <button v-if="config.editRoutePath && selectedDocument.documentStatus !== 'voided' && !selectedDocument.isReversal"
+                                        type="button"
+                                        @click="duplicateDocument(selectedDocument)"
+                                        class="text-xs px-3 py-1.5 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-100 transition">{{ config.duplicateActionLabel || '复制为新单' }}</button>
                             </div>
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                                 <div class="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2"><span class="text-gray-500 text-xs block">单据号</span><span class="font-mono text-gray-800">{{ selectedDocument.documentNo }}</span></div>
@@ -11080,6 +11204,51 @@
                     }
                 }
 
+                async function correctDocument(document) {
+                    if (!config.editRoutePath || !document?.id) return;
+                    const reason = window.prompt(`请输入更正原因（单据 ${document.documentNo}）`, '录单内容需要修正');
+                    if (reason === null) return;
+                    const normalizedReason = String(reason || '').trim();
+                    if (!normalizedReason) {
+                        alert('更正原因不能为空');
+                        return;
+                    }
+                    try {
+                        const result = await api.post(`/api/stock-documents/${document.id}/correct`, { reason: normalizedReason });
+                        const draftId = result.correctionDraft?.id;
+                        if (!draftId) throw new Error('更正草稿生成失败');
+                        alert(`已生成红冲单 ${result.reversalDocument?.documentNo || ''}，并创建更正草稿 ${result.correctionDraft?.documentNo || ''}`);
+                        selectedDocument.value = null;
+                        routeDocumentId.value = '';
+                        router.push({
+                            path: config.editRoutePath,
+                            query: { editDraftId: String(draftId) }
+                        });
+                    } catch (e) {
+                        console.error(e);
+                        alert(e.message || '更正失败');
+                    }
+                }
+
+                async function duplicateDocument(document) {
+                    if (!config.editRoutePath || !document?.id) return;
+                    try {
+                        const result = await api.post(`/api/stock-documents/${document.id}/duplicate`, {});
+                        const draftId = result.draft?.id;
+                        if (!draftId) throw new Error('新草稿生成失败');
+                        alert(`已创建新草稿 ${result.draft?.documentNo || ''}`);
+                        selectedDocument.value = null;
+                        routeDocumentId.value = '';
+                        router.push({
+                            path: config.editRoutePath,
+                            query: { editDraftId: String(draftId) }
+                        });
+                    } catch (e) {
+                        console.error(e);
+                        alert(e.message || '复制失败');
+                    }
+                }
+
                 function formatDocumentStatus(status) {
                     const map = {
                         draft: '草稿',
@@ -11128,6 +11297,8 @@
                     openOriginOrder,
                     openEditDocument,
                     changeDocumentStatus,
+                    correctDocument,
+                    duplicateDocument,
                     formatDocumentStatus,
                     documentStatusClass
                 };
@@ -11191,6 +11362,7 @@
         heroIcon: 'text-emerald-600',
         docType: 'receive_execution',
         editRoutePath: '/receive-execute',
+        duplicateActionLabel: '再次采购',
         description: '独立查询采购收货、手工入库与回库类单据，便于仓库和采购侧统一追溯收货记录。'
     });
 
@@ -12537,27 +12709,14 @@
                                     <tr v-for="(mat, idx) in form.materials" :key="idx">
                                         <td class="px-3 py-2 relative">
                                             <div class="space-y-1">
-                                                <input v-model="mat.materialSearch"
-                                                       @input="searchSopMaterials(idx)"
-                                                       @focus="searchSopMaterials(idx, true)"
-                                                       @blur="hideSopMaterialResults(idx)"
-                                                       type="text"
-                                                       required
-                                                       class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm outline-none focus:ring-1 focus:ring-indigo-500"
-                                                       placeholder="搜索名称 / 编码 / 拼音 / 规格" />
+                                                <material-search-select v-model="mat.materialId"
+                                                                        :initial-items="mat.materialMeta ? [mat.materialMeta] : allMaterials"
+                                                                        context-key="sop-material"
+                                                                        placeholder="搜索名称 / 编码 / 拼音 / 规格"
+                                                                        @change="selectSopMaterial(idx, $event)" />
                                                 <div v-if="mat.materialId && mat.materialMeta" class="text-[11px] text-gray-500">
                                                     {{ mat.materialMeta.code }} · {{ mat.materialMeta.unit }} · {{ mat.materialMeta.supply_mode_label || '-' }} · 库存 {{ mat.materialMeta.total_stock || 0 }}
                                                 </div>
-                                            </div>
-                                            <div v-if="mat.searchOpen" class="absolute left-3 right-3 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-20 max-h-64 overflow-y-auto">
-                                                <button v-for="item in mat.searchResults" :key="item.id" type="button"
-                                                        @mousedown.prevent="selectSopMaterial(idx, item)"
-                                                        class="w-full text-left px-3 py-2 hover:bg-indigo-50 border-b border-gray-100 last:border-b-0">
-                                                    <div class="text-sm font-medium text-gray-800">{{ item.name }}</div>
-                                                    <div class="text-xs text-gray-500 font-mono">{{ item.code }} · {{ item.spec || '-' }} · {{ item.unit }} · {{ item.supply_mode_label || '-' }} · 库存 {{ item.total_stock || 0 }}</div>
-                                                </button>
-                                                <div v-if="mat.searchLoading" class="px-3 py-3 text-xs text-gray-400">搜索中...</div>
-                                                <div v-else-if="mat.searchResults.length === 0" class="px-3 py-3 text-xs text-gray-400">未找到匹配物料</div>
                                             </div>
                                         </td>
                                         <td class="px-3 py-2"><input v-model.number="mat.quantityPerUnit" type="number" step="0.01" min="0.01" required class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm text-center outline-none" /></td>
@@ -12607,7 +12766,6 @@
             const formError = ref('');
             const allMaterials = ref([]);
             const form = ref({ title: '', version: '1.0', category: '', description: '', steps: [], materials: [] });
-            const materialSearchTimers = new Map();
 
             function createSopMaterialRow(row = {}) {
                 const materialMeta = row.materialMeta || null;
@@ -12619,10 +12777,7 @@
                     allowSubstitution: !!row.allowSubstitution,
                     substitutionPriority: row.substitutionPriority ?? 1,
                     materialSearch: label,
-                    materialMeta,
-                    searchResults: [],
-                    searchOpen: false,
-                    searchLoading: false
+                    materialMeta
                 };
             }
 
@@ -12705,54 +12860,18 @@
             function addStep() { form.value.steps.push({ title: '', description: '', duration_minutes: null }); nextTick(() => lucide.createIcons()); }
             function addMaterial() { form.value.materials.push(createSopMaterialRow()); nextTick(() => lucide.createIcons()); }
 
-            function hideSopMaterialResults(idx) {
-                window.setTimeout(() => {
-                    if (form.value.materials[idx]) form.value.materials[idx].searchOpen = false;
-                }, 120);
-            }
-
-            async function runSopMaterialSearch(idx, force = false) {
-                const row = form.value.materials[idx];
-                if (!row) return;
-                const keyword = (row.materialSearch || '').trim();
-                if (!keyword) {
-                    row.searchResults = [];
-                    row.searchOpen = false;
-                    row.searchLoading = false;
-                    return;
-                }
-                row.searchLoading = true;
-                row.searchOpen = true;
-                try {
-                    const data = await api.get('/api/materials/search-options?q=' + encodeURIComponent(keyword) + '&limit=12');
-                    row.searchResults = data.items || [];
-                    row.searchOpen = force || row.searchResults.length > 0;
-                } catch (e) {
-                    row.searchResults = [];
-                } finally {
-                    row.searchLoading = false;
-                }
-            }
-
-            function searchSopMaterials(idx, force = false) {
-                const row = form.value.materials[idx];
-                if (!row) return;
-                if (row.materialMeta && row.materialSearch !== `${row.materialMeta.name} (${row.materialMeta.code})`) {
-                    row.materialId = '';
-                    row.materialMeta = null;
-                }
-                clearTimeout(materialSearchTimers.get(idx));
-                materialSearchTimers.set(idx, setTimeout(() => runSopMaterialSearch(idx, force), force ? 0 : 200));
-            }
-
             function selectSopMaterial(idx, item) {
                 const row = form.value.materials[idx];
                 if (!row) return;
+                if (!item) {
+                    row.materialId = '';
+                    row.materialMeta = null;
+                    row.materialSearch = '';
+                    return;
+                }
                 row.materialId = item.id;
                 row.materialMeta = item;
                 row.materialSearch = `${item.name} (${item.code})`;
-                row.searchResults = [];
-                row.searchOpen = false;
             }
 
             async function submitForm() {
@@ -12789,7 +12908,7 @@
             }
 
             onMounted(() => loadSOPs());
-            return { sops, categories, searchText, filterCategory, showDetail, detail, showForm, editId, formLoading, formError, allMaterials, form, canAction, showSopExport, sopExportRef, debounceLoad, loadSOPs, viewDetail, openCreate, openEdit, addStep, addMaterial, searchSopMaterials, hideSopMaterialResults, selectSopMaterial, submitForm, deleteSOP, duplicateSOP, closeSopForm, onSopOverlayMouseDown, onSopOverlayMouseUp };
+            return { sops, categories, searchText, filterCategory, showDetail, detail, showForm, editId, formLoading, formError, allMaterials, form, canAction, showSopExport, sopExportRef, debounceLoad, loadSOPs, viewDetail, openCreate, openEdit, addStep, addMaterial, selectSopMaterial, submitForm, deleteSOP, duplicateSOP, closeSopForm, onSopOverlayMouseDown, onSopOverlayMouseUp };
         }
     };
 
@@ -13970,7 +14089,7 @@
                             </div>
                         </div>
                         <div class="flex gap-2">
-                            <button v-if="canAction('boms', 'add')" @click="duplicateBOM(detail.bom)" class="text-xs px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg transition">复制</button>
+                            <button v-if="canAction('boms', 'add')" @click="duplicateBOM(detail.bom)" class="text-xs px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg transition">复制为新BOM</button>
                             <button v-if="canAction('boms', 'edit')" @click="openEdit(detail.bom)" class="text-xs px-3 py-1.5 bg-indigo-100 text-indigo-600 hover:bg-indigo-200 rounded-lg transition">编辑</button>
                             <button v-if="canAction('boms', 'delete')" @click="deleteBOM(detail.bom)" class="text-xs px-3 py-1.5 bg-red-100 text-red-600 hover:bg-red-200 rounded-lg transition">删除</button>
                             <button @click="showVersions(detail.bom)" class="text-xs px-3 py-1.5 bg-amber-100 text-amber-700 hover:bg-amber-200 rounded-lg transition">版本历史</button>
@@ -14879,6 +14998,35 @@
                 nextTick(() => lucide.createIcons());
             }
 
+            function buildBomFormFromDetail(data, overrides = {}) {
+                const bom = data.bom;
+                const items = (data.tree || []).map(item => ({
+                    type: item.is_sub_bom ? 'bom' : 'material',
+                    materialId: item.material_id || '',
+                    subBomId: item.sub_bom_id || '',
+                    quantity: item.quantity,
+                    position: item.position || '',
+                    lossRate: item.loss_rate || 0,
+                    allowSubstitution: !!item.allow_substitution,
+                    substitutionPriority: item.substitution_priority || 1,
+                    notes: item.notes || ''
+                }));
+
+                return {
+                    name: bom.name,
+                    bomLevel: bom.bom_level || inferBomLevelFromNameClient(bom.name),
+                    displayVersion: bom.display_version || normalizeBomDisplayVersionClient(bom.version || 'V01'),
+                    outputMaterialId: bom.output_material_id || '',
+                    outputQuantity: bom.output_quantity || 1,
+                    category: bom.category || '',
+                    description: bom.description || '',
+                    status: bom.status,
+                    items,
+                    changeNotes: '',
+                    ...overrides
+                };
+            }
+
             async function openEdit(b) {
                 showDetail.value = false;
                 editId.value = b.id;
@@ -14888,31 +15036,7 @@
 
                 try {
                     const data = await api.get('/api/boms/' + b.id);
-                    const bom = data.bom;
-                    const items = (data.tree || []).map(item => ({
-                        type: item.is_sub_bom ? 'bom' : 'material',
-                        materialId: item.material_id || '',
-                        subBomId: item.sub_bom_id || '',
-                        quantity: item.quantity,
-                        position: item.position || '',
-                        lossRate: item.loss_rate || 0,
-                        allowSubstitution: !!item.allow_substitution,
-                        substitutionPriority: item.substitution_priority || 1,
-                        notes: item.notes || ''
-                    }));
-
-                    form.value = {
-                        name: bom.name,
-                        bomLevel: bom.bom_level || inferBomLevelFromNameClient(bom.name),
-                        displayVersion: bom.display_version || normalizeBomDisplayVersionClient(bom.version || 'V01'),
-                        outputMaterialId: bom.output_material_id || '',
-                        outputQuantity: bom.output_quantity || 1,
-                        category: bom.category || '',
-                        description: bom.description || '',
-                        status: bom.status,
-                        items,
-                        changeNotes: ''
-                    };
+                    form.value = buildBomFormFromDetail(data);
                     showForm.value = true;
                     bomFormCloseGuard.reset();
                     nextTick(() => lucide.createIcons());
@@ -15095,10 +15219,24 @@
             }
 
             async function duplicateBOM(b) {
+                if (!b?.id) return;
+                showDetail.value = false;
+                editId.value = null;
+                formError.value = '';
+                await loadMaterials();
+                await loadAllBoms();
+
                 try {
-                    await api.post('/api/boms/' + b.id + '/duplicate');
-                    showDetail.value = false;
-                    loadBOMs();
+                    const data = await api.get('/api/boms/' + b.id);
+                    const bom = data.bom;
+                    form.value = buildBomFormFromDetail(data, {
+                        name: `${bom.name} (副本)`,
+                        status: 'draft',
+                        changeNotes: ''
+                    });
+                    showForm.value = true;
+                    bomFormCloseGuard.reset();
+                    nextTick(() => lucide.createIcons());
                 } catch (e) { alert(e.message); }
             }
 

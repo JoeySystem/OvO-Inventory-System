@@ -80,7 +80,7 @@
 OvO-Inventory-System/
 ├── public/          # 前端单页应用
 ├── server/          # 后端服务、路由、数据库、脚本
-├── deploy/          # Windows 部署、更新、回滚脚本
+├── deploy/          # 启动、部署、更新、回滚脚本
 ├── docs/            # 方案、路线图、交接与实施文档
 ├── tests/           # 最小冒烟测试
 ├── package.json
@@ -88,6 +88,19 @@ OvO-Inventory-System/
 ```
 
 ## 快速开始
+
+### 给一线使用者的启动方式
+
+正式部署到 Windows 电脑后，推荐使用以下方式，不需要仓库人员输入命令：
+
+- 日常启动：双击 [deploy/start.bat](./deploy/start.bat)
+- 后台启动：双击 [deploy/start-background.bat](./deploy/start-background.bat)
+- 查看状态：双击 [deploy/status.bat](./deploy/status.bat)
+- 停止系统：双击 [deploy/stop.bat](./deploy/stop.bat)
+
+如果已经注册为 Windows 服务，系统会随电脑开机自动启动，仓库人员只需要打开浏览器访问系统地址。
+
+macOS 开发机可双击 [deploy/start-macos.command](./deploy/start-macos.command) 启动，脚本会自动打开浏览器。
 
 ### 1. 安装依赖
 

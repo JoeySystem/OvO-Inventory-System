@@ -922,6 +922,20 @@ function runHistoricalPurchaseRecordItemsMigration(db) {
     });
 }
 
+function runStockDocumentDateMigration(db) {
+    applyMigration(db, '027_stock_document_date', () => {
+        addColumnIfMissing(db, 'stock_documents', 'document_date', 'TEXT');
+        db.exec(`
+            UPDATE stock_documents
+            SET document_date = date(COALESCE(posted_at, executed_at, submitted_at, created_at))
+            WHERE document_date IS NULL OR document_date = '';
+
+            CREATE INDEX IF NOT EXISTS idx_stock_documents_document_date
+                ON stock_documents(document_date);
+        `);
+    });
+}
+
 function runMigrations(db) {
     ensureMigrationsTable(db);
     runLegacyMigrations(db);
@@ -952,6 +966,7 @@ function runMigrations(db) {
     runHistoricalPurchaseRecordsMigration(db);
     runStockDocumentRevisionMigration(db);
     runHistoricalPurchaseRecordItemsMigration(db);
+    runStockDocumentDateMigration(db);
 }
 
 module.exports = { runMigrations };

@@ -12,6 +12,8 @@ const {
     executeDocument,
     postDocument,
     reverseDocument,
+    correctDocument,
+    duplicateDocumentDraft,
     unexecuteDocument,
     discardDraftDocument,
     voidDocument,
@@ -94,8 +96,8 @@ router.get('/', ensureListViewPermission, (req, res) => {
         whereClauses.push('po.order_no LIKE ?');
         params.push(`%${req.query.originNo}%`);
     }
-    if (req.query.start) { whereClauses.push("date(COALESCE(sd.submitted_at, sd.executed_at, sd.posted_at, sd.created_at)) >= date(?)"); params.push(req.query.start); }
-    if (req.query.end) { whereClauses.push("date(COALESCE(sd.submitted_at, sd.executed_at, sd.posted_at, sd.created_at)) <= date(?)"); params.push(req.query.end); }
+    if (req.query.start) { whereClauses.push("date(COALESCE(sd.document_date, sd.submitted_at, sd.executed_at, sd.posted_at, sd.created_at)) >= date(?)"); params.push(req.query.start); }
+    if (req.query.end) { whereClauses.push("date(COALESCE(sd.document_date, sd.submitted_at, sd.executed_at, sd.posted_at, sd.created_at)) <= date(?)"); params.push(req.query.end); }
     if (req.query.materialId) {
         whereClauses.push('EXISTS (SELECT 1 FROM stock_document_items sdi WHERE sdi.document_id = sd.id AND sdi.material_id = ?)');
         params.push(Number(req.query.materialId));
@@ -134,7 +136,7 @@ router.get('/', ensureListViewPermission, (req, res) => {
         LEFT JOIN materials m ON sdi.material_id = m.id
         ${whereSQL}
         GROUP BY sd.id
-        ORDER BY COALESCE(sd.posted_at, sd.executed_at, sd.submitted_at, sd.created_at) DESC, sd.id DESC
+        ORDER BY COALESCE(sd.document_date, sd.posted_at, sd.executed_at, sd.submitted_at, sd.created_at) DESC, sd.id DESC
         LIMIT ? OFFSET ?
     `).all(...params, limit, (page - 1) * limit);
 
@@ -159,6 +161,7 @@ router.get('/', ensureListViewPermission, (req, res) => {
                 toWarehouseId: row.to_warehouse_id,
                 toWarehouseName: row.to_warehouse_name || '-',
                 counterparty: row.counterparty || null,
+                documentDate: row.document_date || null,
                 originType: row.origin_type || null,
                 originId: row.origin_id || null,
                 originNo: row.origin_no || null,
@@ -303,6 +306,48 @@ router.post('/:id/reverse',
         const document = run();
         auditDocument(req, 'update', document, `红冲单据 ${document.reversalOfDocumentNo || document.documentNo}`);
         res.json({ success: true, data: { document } });
+    }
+);
+
+router.post('/:id/correct',
+    (req, res, next) => {
+        const db = getDB();
+        req.document = getDocumentById(db, Number(req.params.id));
+        next();
+    },
+    requireDocumentPermission('edit', req => req.document.documentType),
+    (req, res) => {
+        const db = getDB();
+        const run = db.transaction(() => correctDocument(db, Number(req.params.id), req.session.user.id, req.body?.reason));
+        const result = run();
+        auditDocument(
+            req,
+            'update',
+            result.originalDocument,
+            `更正单据 ${result.originalDocument.documentNo}，红冲 ${result.reversalDocument.documentNo}，生成草稿 ${result.correctionDraft.documentNo}`
+        );
+        res.json({ success: true, data: result });
+    }
+);
+
+router.post('/:id/duplicate',
+    (req, res, next) => {
+        const db = getDB();
+        req.document = getDocumentById(db, Number(req.params.id));
+        next();
+    },
+    requireDocumentPermission('add', req => req.document.documentType),
+    (req, res) => {
+        const db = getDB();
+        const run = db.transaction(() => duplicateDocumentDraft(db, Number(req.params.id), req.session.user.id));
+        const result = run();
+        auditDocument(
+            req,
+            'create',
+            result.draft,
+            `复制单据 ${result.originalDocument.documentNo}，生成新草稿 ${result.draft.documentNo}`
+        );
+        res.status(201).json({ success: true, data: result });
     }
 );
 

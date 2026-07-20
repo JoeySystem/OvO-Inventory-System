@@ -112,6 +112,42 @@ describe('OvO System smoke tests', () => {
         expect(Array.isArray(response.body)).toBe(true);
     });
 
+    it('skips invalid material import rows and continues valid rows', async () => {
+        const agent = request.agent(app);
+        const login = await agent
+            .post('/api/auth/login')
+            .send({ username: 'admin', password: 'admin123' });
+        expect(login.status).toBe(200);
+
+        const suffix = Date.now();
+        const validCode = `TEST-IMPORT-${suffix}`;
+        const payload = [
+            { code: validCode, name: '容错导入有效物料', unit: 'PCS', cost_price: 12.5 },
+            { code: `TEST-IMPORT-BAD-${suffix}`, name: '错误数字物料', unit: 'PCS', cost_price: '不是数字' },
+            { code: `TEST-IMPORT-NAME-${suffix}`, unit: 'PCS' }
+        ];
+
+        const preview = await agent
+            .post('/api/materials/import/preview')
+            .attach('file', Buffer.from(JSON.stringify(payload)), 'material-import.json');
+
+        expect(preview.status).toBe(200);
+        expect(preview.body.data.summary.total).toBe(3);
+        expect(preview.body.data.summary.invalid).toBe(2);
+
+        const commit = await agent
+            .post('/api/materials/import/commit')
+            .send({ previewToken: preview.body.data.previewToken, mode: 'best_effort' });
+
+        expect(commit.status).toBe(200);
+        expect(commit.body.data.imported).toBe(1);
+        expect(commit.body.data.skipped).toBe(2);
+        expect(commit.body.data.errors).toHaveLength(2);
+
+        const inserted = getDB().prepare('SELECT id FROM materials WHERE code = ?').get(validCode);
+        expect(inserted).toBeTruthy();
+    });
+
     it('supports BOM naming governance summary', async () => {
         const agent = request.agent(app);
         const login = await agent
@@ -277,6 +313,140 @@ describe('OvO System smoke tests', () => {
         expect(detail.body.data.document.documentStatus).toBe('posted');
         expect(detail.body.data.document.totalAmount).toBeCloseTo(62.5, 5);
         expect(detail.body.data.document.items).toHaveLength(1);
+    });
+
+    it('corrects an executed receive document by posting, reversing, and creating a replacement draft', async () => {
+        const agent = request.agent(app);
+        const login = await agent
+            .post('/api/auth/login')
+            .send({ username: 'admin', password: 'admin123' });
+        expect(login.status).toBe(200);
+
+        const createMaterial = await agent
+            .post('/api/materials')
+            .send({
+                name: '业务测试物料-更正流程',
+                code: 'MAT-WF-CORR-001',
+                baseUnit: 'PCS',
+                materialType: 'raw',
+                lifecycleStatus: 'active'
+            });
+        expect(createMaterial.status).toBe(201);
+        const materialId = createMaterial.body.data.id;
+
+        const warehouses = await agent.get('/api/warehouses');
+        expect(warehouses.status).toBe(200);
+        const warehouse = warehouses.body.data.warehouses[0];
+        expect(warehouse).toBeTruthy();
+
+        const firstDraft = await agent.post('/api/stock-documents').send({
+            docType: 'receive_execution',
+            warehouseId: warehouse.id,
+            counterparty: '更正流程供应商',
+            referenceNo: 'WF-CORR-001',
+            notes: '需要更正的原始收货单',
+            items: [{ materialId, quantity: 1, unitPrice: 8.7 }]
+        });
+        expect(firstDraft.status).toBe(201);
+        const firstDocumentId = firstDraft.body.data.document.id;
+        expect((await agent.post(`/api/stock-documents/${firstDocumentId}/submit`).send({})).status).toBe(200);
+        expect((await agent.post(`/api/stock-documents/${firstDocumentId}/execute`).send({})).status).toBe(200);
+
+        const secondDraft = await agent.post('/api/stock-documents').send({
+            docType: 'receive_execution',
+            warehouseId: warehouse.id,
+            counterparty: '更正流程供应商',
+            referenceNo: 'WF-CORR-002',
+            notes: '原单之后的后续库存流水',
+            items: [{ materialId, quantity: 1, unitPrice: 8.7 }]
+        });
+        expect(secondDraft.status).toBe(201);
+        const secondDocumentId = secondDraft.body.data.document.id;
+        expect((await agent.post(`/api/stock-documents/${secondDocumentId}/submit`).send({})).status).toBe(200);
+        expect((await agent.post(`/api/stock-documents/${secondDocumentId}/execute`).send({})).status).toBe(200);
+
+        const blockedUnexecute = await agent
+            .post(`/api/stock-documents/${firstDocumentId}/unexecute`)
+            .send({ reason: '验证后续流水阻止直接撤销' });
+        expect(blockedUnexecute.status).toBe(409);
+
+        const correction = await agent
+            .post(`/api/stock-documents/${firstDocumentId}/correct`)
+            .send({ reason: '测试更正' });
+        expect(correction.status).toBe(200);
+        const result = correction.body.data;
+        expect(result.originalDocument.documentStatus).toBe('posted');
+        expect(result.originalDocument.reversedByDocumentId).toBe(result.reversalDocument.id);
+        expect(result.reversalDocument.documentStatus).toBe('posted');
+        expect(result.reversalDocument.isReversal).toBe(true);
+        expect(result.correctionDraft.documentStatus).toBe('draft');
+        expect(result.correctionDraft.items).toHaveLength(1);
+        expect(result.correctionDraft.items[0].materialId).toBe(materialId);
+        expect(result.correctionDraft.items[0].quantity).toBe(1);
+
+        const stock = getDB().prepare(
+            'SELECT quantity FROM inventory WHERE material_id = ? AND warehouse_id = ?'
+        ).get(materialId, warehouse.id);
+        expect(Number(stock.quantity)).toBe(1);
+    });
+
+    it('duplicates an existing receive document into a new editable draft', async () => {
+        const agent = request.agent(app);
+        const login = await agent
+            .post('/api/auth/login')
+            .send({ username: 'admin', password: 'admin123' });
+        expect(login.status).toBe(200);
+
+        const createMaterial = await agent
+            .post('/api/materials')
+            .send({
+                name: '业务测试物料-再次采购',
+                code: 'MAT-WF-DUP-001',
+                baseUnit: 'PCS',
+                materialType: 'raw',
+                lifecycleStatus: 'active'
+            });
+        expect(createMaterial.status).toBe(201);
+        const materialId = createMaterial.body.data.id;
+
+        const warehouses = await agent.get('/api/warehouses');
+        expect(warehouses.status).toBe(200);
+        const warehouse = warehouses.body.data.warehouses[0];
+        expect(warehouse).toBeTruthy();
+
+        const draft = await agent.post('/api/stock-documents').send({
+            docType: 'receive_execution',
+            warehouseId: warehouse.id,
+            counterparty: '再次采购供应商',
+            referenceNo: 'WF-DUP-001',
+            documentDate: '2026-06-01',
+            notes: '第一次采购记录',
+            items: [{ materialId, quantity: 7, unitPrice: 3.5 }]
+        });
+        expect(draft.status).toBe(201);
+        const sourceDocumentId = draft.body.data.document.id;
+        expect((await agent.post(`/api/stock-documents/${sourceDocumentId}/submit`).send({})).status).toBe(200);
+        expect((await agent.post(`/api/stock-documents/${sourceDocumentId}/execute`).send({})).status).toBe(200);
+        expect((await agent.post(`/api/stock-documents/${sourceDocumentId}/post`).send({})).status).toBe(200);
+
+        const duplicate = await agent
+            .post(`/api/stock-documents/${sourceDocumentId}/duplicate`)
+            .send({});
+        expect(duplicate.status).toBe(201);
+        const newDraft = duplicate.body.data.draft;
+        expect(newDraft.id).not.toBe(sourceDocumentId);
+        expect(newDraft.documentStatus).toBe('draft');
+        expect(newDraft.documentNo).not.toBe('WF-DUP-001');
+        expect(newDraft.documentDate).not.toBe('2026-06-01');
+        expect(newDraft.counterparty).toBe('再次采购供应商');
+        expect(newDraft.notes).toContain('复制自单据 WF-DUP-001');
+        expect(newDraft.items).toHaveLength(1);
+        expect(newDraft.items[0].materialId).toBe(materialId);
+        expect(newDraft.items[0].quantity).toBe(7);
+        expect(newDraft.items[0].unitPrice).toBe(3.5);
+        expect(newDraft.executedAt).toBeNull();
+        expect(newDraft.postedAt).toBeNull();
+        expect(newDraft.reversedByDocumentId).toBeNull();
     });
 
     it('supports production exception governance end to end', async () => {
